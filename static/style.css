@@ -836,6 +836,42 @@ body.bg-pattern-sparkles {
       transition: left 0.12s ease, top 0.12s ease, width 0.12s ease, height 0.12s ease, opacity 0.12s, transform 0.12s;
     }
     #tile-ghost.visible { opacity: 1; transform: scale(1); }
+    /* Draggable grid resize seams (vertical + horizontal). Shown only when a
+       divider is a real boundary between two tiles/chat; positioned in JS.
+       z-index 500 keeps the seam grabbable above tiled tool windows (<=300). */
+    .tile-seam {
+      position: fixed; z-index: 500; display: none; touch-action: none;
+      background: linear-gradient(var(--seam-dir, to right), transparent 0 3px,
+        color-mix(in srgb, var(--accent, var(--red)) 38%, transparent) 3px 7px,
+        transparent 7px 10px);
+    }
+    .tile-seam-x { width: 10px; cursor: col-resize; --seam-dir: to right; }
+    .tile-seam-y { height: 10px; cursor: row-resize; --seam-dir: to bottom; }
+    /* The chat top bar is a drag handle (desktop) — grab it to tile the chat,
+       like a tool window's title bar. Buttons inside keep their pointer cursor. */
+    @media (min-width: 769px) {
+      /* Drag handle: suppress text selection while dragging, matching the
+         user-select:none that windowDrag sets on every tool window's header. */
+      .chat-top-bar { cursor: move; user-select: none; -webkit-user-select: none; }
+      .chat-top-bar button { cursor: pointer; }
+      .chat-top-bar::before {
+        content: "⠿";
+        margin-right: 6px;
+        opacity: 0.35;
+        font-size: 13px;
+        line-height: 1;
+        pointer-events: none;
+        align-self: center;
+      }
+      /* While being dragged, the chat reads as a floating window. */
+      .chat-container.chat-dragging {
+        z-index: 600;
+        border-radius: 10px;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+        overflow: hidden;
+        opacity: 0.97;
+      }
+    }
     /* Bottom dock — chip per minimized modal */
     #minimized-dock {
       position: fixed; bottom: var(--composer-clearance, 12px); left: 50%; transform: translateX(-50%);
@@ -14884,22 +14920,6 @@ body [data-act="from-sender"] {
   display: none !important;
 }
 
-/* Edge docking. Docked panels are fixed to the viewport edge; the workspace
-   panes reserve room with margins so left + right docks can be active at the
-   same time without skewing the entire body box. */
-body.right-dock-active {
-  padding-right: 0;
-}
-body.left-dock-active {
-  padding-left: 0;
-}
-body.left-dock-active:not(.email-doc-split-active) .chat-container {
-  margin-left: var(--left-dock-w, 0px);
-}
-body.right-dock-active .chat-container,
-body.right-dock-active:not(.email-doc-split-active) .doc-editor-pane {
-  margin-right: var(--right-dock-w, 0px);
-}
 .modal.modal-right-docked {
   align-items: stretch;
   justify-content: flex-end;

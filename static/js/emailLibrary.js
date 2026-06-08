@@ -9,6 +9,7 @@ import { folderDisplayName, sortedFolders } from './emailInbox.js';
 import settingsModule from './settings.js';
 import * as Modals from './modalManager.js';
 import { makeWindowDraggable } from './windowDrag.js';
+import { snapModalToZone, releaseTile } from './tileManager.js';
 import {
   _esc, _escLinkify, _extractName, _parseTurnMeta,
   _formatBubbleDate, _formatRecipients, _senderColor, _initials,
@@ -337,6 +338,75 @@ function _emailSplitLeftEdge() {
   return _readCssPx('--icon-rail-w') + _readCssPx('--sidebar-w');
 }
 
+// Inset the tiling canvas leaves around the viewport edge — mirrors the 4px
+// margin tileManager._viewportSafeRect reserves. (No magic numbers.)
+const VIEWPORT_SAFE_MARGIN_PX = 4;
+
+// Floating-window geometry used when a tiled email is dragged back out of its
+// half. Keep a usable minimum size and fall back to sensible defaults if the
+// live rect is somehow empty. (No magic numbers.)
+const EMAIL_FLOAT_MIN_W_PX = 420;
+const EMAIL_FLOAT_FALLBACK_W_PX = 560;
+const EMAIL_FLOAT_MIN_H_PX = 320;
+const EMAIL_FLOAT_FALLBACK_H_PX = 620;
+const EMAIL_FLOAT_MAX_H = '85vh';
+
+// Half-canvas snap zones, computed the same sidebar/icon-rail-aware way as
+// tileManager._viewportSafeRect so an externally-driven snap lands exactly on
+// the tile grid. That helper is module-private, so replicating its math here
+// is the supported pattern (notes.js does the same to drive its own
+// snapModalToZone). Returns the left-half zone plus the seam coordinates the
+// doc pane needs.
+function _canvasHalves() {
+  const sidebar = document.getElementById('sidebar');
+  const rail = document.querySelector('.icon-rail') || document.querySelector('#icon-rail');
+  let leftEdge = 0;
+  const sb = sidebar?.getBoundingClientRect?.();
+  if (sb && sb.right > 0 && !sidebar.classList.contains('hidden')) leftEdge = Math.max(leftEdge, sb.right);
+  const rr = rail?.getBoundingClientRect?.();
+  if (rr && rr.right > 0) leftEdge = Math.max(leftEdge, rr.right);
+  const safe = {
+    left: leftEdge + VIEWPORT_SAFE_MARGIN_PX,
+    top: VIEWPORT_SAFE_MARGIN_PX,
+    right: window.innerWidth - VIEWPORT_SAFE_MARGIN_PX,
+    bottom: window.innerHeight - VIEWPORT_SAFE_MARGIN_PX,
+  };
+  const W = safe.right - safe.left;
+  const H = safe.bottom - safe.top;
+  const halfWidth = W / 2;
+  return {
+    leftEdge: safe.left,
+    halfWidth,
+    left: { name: 'left-half', rect: { left: safe.left, top: safe.top, width: halfWidth, height: H } },
+  };
+}
+
+// Tile the email window into the LEFT half of the canvas so the document /
+// compose pane can fill the RIGHT half (fixed 50/50). Replaces the old
+// modalSnap left-edge dock + email-snap-left overlay: the email is now a real
+// tile (tileManager owns its geometry via dataset._tileZone), the doc pane is
+// positioned into the complementary half by the --email-doc-split-right-x CSS
+// var, and the chat reflows into whatever the tiles leave free. Returns true
+// when the email was tiled, false on mobile / when the modal is unavailable.
+export function tileEmailLeftForDocument(modal) {
+  if (window.innerWidth <= 768) return false;
+  if (!modal || modal.classList.contains('hidden')) return false;
+  const content = modal.querySelector('.modal-content');
+  if (!content) return false;
+  // Install the re-anchor hooks (resize / sidebar / minimize-restore) the first
+  // time a split is created so the seam stays glued to the email's tiled edge.
+  _wireEmailDocumentSplitReanchor();
+  // Drop any legacy overlay-dock state so the tile is the sole geometry owner.
+  modal.classList.remove('email-snap-left');
+  const halves = _canvasHalves();
+  snapModalToZone(modal, halves.left);
+  // Publish the split seam (the email's right edge == the canvas midpoint) so
+  // the doc pane fills the right half via the email-doc-split CSS rule.
+  _setEmailDocumentSplit(halves.leftEdge, halves.halfWidth);
+  _scheduleEmailDocumentSplitMeasure(modal);
+  return true;
+}
+
 function _setEmailDocumentSplit(leftEdge, emailWidth) {
   if (window.innerWidth <= 768) return;
   // Zero gap so the doc-pane sits flush against the email's right edge.
@@ -358,21 +428,17 @@ function _measureEmailDocumentSplit(modal) {
   const content = modal?.querySelector?.('.modal-content');
   const rect = content?.getBoundingClientRect?.();
   if (!rect || !rect.width) return;
-  const splitGap = 0;
-  document.documentElement.style.setProperty('--email-doc-split-right-x', `${Math.ceil(rect.right + splitGap)}px`);
+  // The email is tiled (left-half); its right edge is the split seam. Publish
+  // it so the doc pane fills the complementary right side. The email content's
+  // own geometry is owned by tileManager's snap — do NOT re-pin it here (that
+  // would fight the tile's !important position/size).
+  document.documentElement.style.setProperty('--email-doc-split-right-x', `${Math.ceil(rect.right)}px`);
   try {
     modal.style.setProperty('z-index', '150', 'important');
-    if (content) {
-      content.style.setProperty('position', 'absolute', 'important');
-      content.style.setProperty('left', '0px', 'important');
-      content.style.setProperty('right', 'auto', 'important');
-      content.style.setProperty('width', `${Math.ceil(rect.width)}px`, 'important');
-      content.style.setProperty('max-width', `${Math.ceil(rect.width)}px`, 'important');
-    }
     const docPane = document.getElementById('doc-editor-pane');
     if (docPane) {
       docPane.style.setProperty('position', 'fixed', 'important');
-      docPane.style.setProperty('left', `${Math.ceil(rect.right + splitGap)}px`, 'important');
+      docPane.style.setProperty('left', `${Math.ceil(rect.right)}px`, 'important');
       docPane.style.setProperty('right', '0px', 'important');
       docPane.style.setProperty('top', '0px', 'important');
       docPane.style.setProperty('bottom', '0px', 'important');
@@ -380,6 +446,11 @@ function _measureEmailDocumentSplit(modal) {
       docPane.style.setProperty('max-width', 'none', 'important');
       docPane.style.setProperty('height', '100vh', 'important');
       docPane.style.setProperty('z-index', '260', 'important');
+      // Mark the doc pane as the RIGHT-half tile of the split so tileManager's
+      // _reflowChat counts both halves as occupied and HIDES the chat
+      // (display:none) instead of reflowing it into the right half where the
+      // doc pane merely covers it. The pane keeps its own geometry above.
+      if (docPane.dataset._tileZone !== 'right-half') docPane.dataset._tileZone = 'right-half';
     }
   } catch (_) {}
 }
@@ -393,6 +464,70 @@ function _scheduleEmailDocumentSplitMeasure(modal) {
   setTimeout(() => _measureEmailDocumentSplit(modal), 700);
 }
 
+// The currently-tiled email modal (left-half) backing an active split, or null.
+function _tiledEmailSplitModal() {
+  const content = document.querySelector(
+    "#email-lib-modal .modal-content[data-_tile-zone='left-half'], "
+    + ".modal[id^='email-reader-'] .modal-content[data-_tile-zone='left-half']"
+  );
+  const modal = content?.closest?.('.modal');
+  return (modal && !modal.classList.contains('hidden')) ? modal : null;
+}
+
+// Re-anchor the split seam after the tiling canvas re-clamps. tileManager's
+// _reclampAll re-clamps the email's left-half tile on viewport resize and
+// sidebar toggle (its right edge moves) but deliberately excludes
+// #doc-editor-pane and never re-runs the split measure — so without this the
+// doc pane's inline `left` and --email-doc-split-right-x stay pinned to the OLD
+// seam, opening a gap (viewport/sidebar shrank) or an overlap (grew). Restores
+// the re-anchor the old modalSnap _leftDockNavObs provided. Re-SCHEDULES the
+// measure (rAF + settle timeouts) rather than measuring once, so the doc pane
+// lands correctly whether the re-clamp was instant (resize) or animated
+// (sidebar toggle).
+function _reanchorEmailDocumentSplit() {
+  if (window.innerWidth <= 768) return;
+  if (!document.body.classList.contains('email-doc-split-active')) return;
+  const modal = _tiledEmailSplitModal();
+  if (modal) _scheduleEmailDocumentSplitMeasure(modal);
+}
+
+let _emailSplitReanchorWired = false;
+function _wireEmailDocumentSplitReanchor() {
+  if (_emailSplitReanchorWired) return;
+  _emailSplitReanchorWired = true;
+  // Resize fires this handler in the SAME event as tileManager's resize
+  // listener, which was registered first (this module imports tileManager, so
+  // tileManager evaluates first). rAF callbacks run in scheduling order, so the
+  // re-clamp's rAF runs before our measure's rAF and we read the new edge.
+  window.addEventListener('resize', _reanchorEmailDocumentSplit);
+  // Sidebar show/hide/side-swap changes the safe-rect → tileManager re-clamps
+  // the email; watch the same signal and re-anchor the doc pane to match.
+  const wireSidebar = () => {
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar) { requestAnimationFrame(wireSidebar); return; }
+    new MutationObserver(_reanchorEmailDocumentSplit)
+      .observe(sidebar, { attributes: true, attributeFilter: ['class'] });
+  };
+  wireSidebar();
+  // Rebuild the side-by-side split when a tiled email is restored from the
+  // dock. minimize() (modalManager) tears the split down + releaseTile()s the
+  // email so the chat reclaims the half while minimized, and tags the modal
+  // with dataset._restoreSplitLeft. restore() re-shows the modal and fires
+  // odysseus:modal-opened, but nothing re-tiles it — so without this the email
+  // returns as a centred floating window over the doc pane. Re-tile it iff the
+  // document pane is still open (otherwise leave it floating).
+  window.addEventListener('odysseus:modal-opened', (e) => {
+    const id = e?.detail?.id;
+    const modal = e?.detail?.modal;
+    if (!modal || (id !== 'email-lib-modal' && !id?.startsWith?.('email-reader-'))) return;
+    if (modal.dataset._restoreSplitLeft !== '1') return;
+    delete modal.dataset._restoreSplitLeft;
+    if (window.innerWidth <= 768) return;
+    if (!document.body.classList.contains('doc-view')) return;
+    try { tileEmailLeftForDocument(modal); } catch (_) {}
+  });
+}
+
 function _clearEmailDocumentSplit() {
   document.body.classList.remove('email-doc-split-active');
   document.documentElement.style.removeProperty('--email-doc-split-left-x');
@@ -404,6 +539,9 @@ function _clearEmailDocumentSplit() {
     'position', 'left', 'right', 'top', 'bottom', 'width', 'max-width',
     'height', 'z-index', 'transform',
   ].forEach(prop => docPane.style.removeProperty(prop));
+  // Drop the right-half tile flag so _reflowChat stops counting the right half
+  // as occupied and lets the chat reclaim the space.
+  delete docPane.dataset._tileZone;
 }
 
 function _hasDesktopRoomForEmailAndDocument(modal) {
@@ -429,46 +567,10 @@ function _prepareEmailWindowForDocument(modal) {
     _clearEmailDocumentSplit();
     return true;
   }
-  if (modal.classList.contains('modal-left-docked')) {
-    const content = modal.querySelector('.modal-content');
-    const rect = content?.getBoundingClientRect?.();
-    if (content?._leftDockNavObs) {
-      try { content._leftDockNavObs.navObs.disconnect(); } catch (_) {}
-      try { content._leftDockNavObs.bodyObs && content._leftDockNavObs.bodyObs.disconnect(); } catch (_) {}
-      try { content._leftDockNavObs.disconnectDocObs && content._leftDockNavObs.disconnectDocObs(); } catch (_) {}
-      try { window.removeEventListener('resize', content._leftDockNavObs.reanchor); } catch (_) {}
-      delete content._leftDockNavObs;
-    }
-    modal.classList.remove('modal-left-docked');
-    modal.classList.add('email-snap-left');
-    document.body.classList.remove('left-dock-active');
-    document.documentElement.style.removeProperty('--left-dock-w');
-    if (content) {
-      delete content._dockSide;
-      content.style.position = 'fixed';
-      content.style.left = Math.round(rect?.left || _emailSplitLeftEdge()) + 'px';
-      content.style.top = '0';
-      content.style.right = 'auto';
-      content.style.bottom = '0';
-      content.style.width = Math.round(rect?.width || 440) + 'px';
-      content.style.maxWidth = Math.round(rect?.width || 440) + 'px';
-      content.style.height = '100vh';
-      content.style.maxHeight = '100vh';
-      content.style.borderRadius = '0';
-      content.style.transform = 'none';
-      content.style.margin = '0';
-    }
-  }
-  if (modal.classList.contains('email-snap-left') || modal.classList.contains('modal-left-docked')) {
-    const rect = modal.querySelector('.modal-content')?.getBoundingClientRect?.();
-    _setEmailDocumentSplit(rect?.left || _emailSplitLeftEdge(), rect?.width || 420);
-    _scheduleEmailDocumentSplitMeasure(modal);
-    return false;
-  }
-  // If Email is fullscreen and there is room, park it left instead of
-  // minimizing so the document/compose pane can open beside it.
-  _snapEmailModalToLeftSidebar(modal);
-  return false;
+  // Enough room for a side-by-side split: tile the email into the left half so
+  // the document/compose pane fills the right half. Returning false keeps the
+  // email open (the caller only minimizes when this returns true).
+  return !tileEmailLeftForDocument(modal);
 }
 
 function _wireUnreadTabClick() {
@@ -1387,21 +1489,36 @@ function _makeDraggable(content, modal, fsClass) {
     skipSelector: '.close-btn, .modal-close',
     enableLeftDock: true,  // park the email on the left while replying on the right
     onDragStart: ({ rect }) => {
-      if (!modal.classList.contains('email-snap-left')) return;
-      modal.classList.remove('email-snap-left');
-      _clearEmailDocumentSplit();
-      content.style.position = 'fixed';
-      content.style.left = `${Math.round(rect.left)}px`;
-      content.style.top = `${Math.round(rect.top)}px`;
-      content.style.right = '';
-      content.style.bottom = '';
-      content.style.width = `${Math.max(420, Math.round(rect.width || 560))}px`;
-      content.style.maxWidth = '';
-      content.style.height = `${Math.max(320, Math.round(rect.height || 620))}px`;
-      content.style.maxHeight = '85vh';
-      content.style.borderRadius = '';
-      content.style.transform = 'none';
-      content.style.margin = '0';
+      // Dragging the email out of its tile dissolves the side-by-side split.
+      // onDragStart fires on the header mousedown BEFORE any movement, and
+      // tileManager only un-snaps on a >=6px pointermove — so we must NOT
+      // assume that move happens (a plain click never moves). Do the unsnap
+      // HERE and re-pin a floating window at the same spot/size, keeping the
+      // geometry self-consistent so a click can't strand the email in a
+      // half-tile with the seam already gone (which also blocked recovery,
+      // since the doc-view re-tile guard skips when _tileZone is still set).
+      modal.classList.remove('email-snap-left');  // legacy overlay state
+      const wasTiled = !!content.dataset._tileZone;
+      if (wasTiled || document.body.classList.contains('email-doc-split-active')) {
+        _clearEmailDocumentSplit();  // seam vars/class + doc-pane right-half tile
+      }
+      if (wasTiled) {
+        releaseTile(content);  // drop dataset._tileZone + the !important snap geometry
+        // Re-pin as a normal floating window at the same on-screen spot/size so
+        // the drag continues without a visual jump.
+        content.style.position = 'fixed';
+        content.style.left = `${Math.round(rect.left)}px`;
+        content.style.top = `${Math.round(rect.top)}px`;
+        content.style.right = '';
+        content.style.bottom = '';
+        content.style.width = `${Math.max(EMAIL_FLOAT_MIN_W_PX, Math.round(rect.width || EMAIL_FLOAT_FALLBACK_W_PX))}px`;
+        content.style.maxWidth = '';
+        content.style.height = `${Math.max(EMAIL_FLOAT_MIN_H_PX, Math.round(rect.height || EMAIL_FLOAT_FALLBACK_H_PX))}px`;
+        content.style.maxHeight = EMAIL_FLOAT_MAX_H;
+        content.style.borderRadius = '';
+        content.style.transform = 'none';
+        content.style.margin = '0';
+      }
     },
     onEnterFullscreen: fsClass ? enterFullscreen : null,
     onExitFullscreen: fsClass ? exitFullscreen : null,
@@ -1418,31 +1535,14 @@ function _snapEmailModalToLeftSidebar(modal) {
   if (window.innerWidth < 900) return false;
   const content = modal.querySelector('.modal-content');
   if (!content) return false;
-  // Only dock if currently fullscreen — for a manually-sized window the
+  // Only retile if currently fullscreen — for a manually-sized window the
   // user already chose its layout; don't surprise them by snapping it.
   const wasLibFs = modal.classList.contains('email-lib-fullscreen');
   const wasWinFs = modal.classList.contains('email-window-fullscreen');
   if (!wasLibFs && !wasWinFs) return false;
   modal.classList.remove('email-lib-fullscreen');
   modal.classList.remove('email-window-fullscreen');
-  modal.classList.add('email-snap-left');
-  const W = Math.min(440, Math.max(360, Math.round(window.innerWidth * 0.30)));
-  const left = _emailSplitLeftEdge();
-  content.style.position = 'fixed';
-  content.style.left = '0';
-  content.style.top = '0';
-  content.style.right = '';
-  content.style.bottom = '0';
-  content.style.width = W + 'px';
-  content.style.maxWidth = W + 'px';
-  content.style.height = '100vh';
-  content.style.maxHeight = '100vh';
-  content.style.borderRadius = '0';
-  content.style.transform = 'none';
-  content.style.margin = '0';
-  _setEmailDocumentSplit(left, W);
-  _scheduleEmailDocumentSplitMeasure(modal);
-  return true;
+  return tileEmailLeftForDocument(modal);
 }
 
 async function _loadFolders({ resetMissing = false } = {}) {

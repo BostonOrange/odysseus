@@ -4,7 +4,7 @@
 import uiModule from './ui.js';
 import searchModule from './search.js';
 import { makeWindowDraggable } from './windowDrag.js';
-import { clearDockSide } from './modalSnap.js';
+import { releaseTile } from './tileManager.js';
 import { sortModelIds } from './modelSort.js';
 import { isAltGrEvent } from './platform.js';
 
@@ -60,21 +60,11 @@ function initDrag() {
 function resetWindowPlacement() {
   const content = modalEl && modalEl.querySelector('.settings-modal-content');
   if (!content) return;
-  const hadLeft = modalEl.classList.contains('modal-left-docked');
-  const hadRight = modalEl.classList.contains('modal-right-docked');
-  modalEl.classList.remove('modal-left-docked', 'modal-right-docked');
-  if (hadLeft) clearDockSide('left', modalEl);
-  if (hadRight) clearDockSide('right', modalEl);
-  if (content._leftDockNavObs) {
-    try { content._leftDockNavObs.navObs && content._leftDockNavObs.navObs.disconnect(); } catch (_) {}
-    try { window.removeEventListener('resize', content._leftDockNavObs.reanchor); } catch (_) {}
-    delete content._leftDockNavObs;
-  }
-  delete content._preDockSnapshot;
-  delete content._dockSide;
-  delete content._dockSuspended;
-  delete content.dataset._tilePreSnap;
-  delete content.dataset._tileZone;
+  // Un-tile the window: drops dataset._tileZone + the pre-snap snapshot and the
+  // !important snap geometry, and reflows the chat back into the freed canvas.
+  releaseTile(content);
+  // Clear the remaining inline placement props releaseTile doesn't touch so the
+  // window falls back to its centered CSS default.
   [
     'position', 'left', 'top', 'right', 'bottom', 'margin', 'transform',
     'width', 'height', 'max-width', 'max-height', 'border-radius', 'transition',

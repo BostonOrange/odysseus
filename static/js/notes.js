@@ -8,8 +8,7 @@ import { spawnConfetti } from './compare/vote.js';
 import * as Modals from './modalManager.js';
 import { attachColorPicker } from './colorPicker.js';
 import { makeWindowDraggable } from './windowDrag.js';
-import { snapModalToZone } from './tileManager.js';
-import { applyEdgeDock, clearDockSide } from './modalSnap.js';
+import { snapModalToZone, releaseTile, zoneByName } from './tileManager.js';
 
 const API_BASE = window.location.origin;
 let _open = false;
@@ -178,26 +177,25 @@ function _wireNotesWindow(pane) {
 
 function _clearNotesSnapStyles(pane) {
   if (!pane) return;
-  const hadLeft = pane.classList.contains('modal-left-docked');
-  const hadRight = pane.classList.contains('modal-right-docked');
-  pane.classList.remove('notes-window-fullscreen', 'modal-left-docked', 'modal-right-docked');
-  if (hadLeft) clearDockSide('left', pane);
-  if (hadRight) clearDockSide('right', pane);
-  ['position', 'left', 'top', 'right', 'bottom', 'width', 'max-width', 'height',
-    'max-height', 'margin', 'transform', 'border-radius']
+  // Un-tile: drop the fullscreen class, the tile flags/snapshot, and the inline
+  // snap geometry so the pane can be re-snapped (or fall back to its CSS
+  // default). releaseTile clears dataset._tileZone/_tilePreSnap + the !important
+  // snap props and reflows the chat into the freed canvas.
+  pane.classList.remove('notes-window-fullscreen');
+  releaseTile(pane);
+  ['right', 'bottom', 'max-width', 'border-radius']
     .forEach((prop) => pane.style.removeProperty(prop));
-  delete pane.dataset._tilePreSnap;
-  delete pane.dataset._tileZone;
-  delete pane._preDockSnapshot;
-  delete pane._dockSide;
-  delete pane._dockSuspended;
 }
 
 function _restoreNotesSidebarDock(pane) {
   if (!pane || window.innerWidth <= 768) return;
   _clearNotesSnapStyles(pane);
   if (!pane.isConnected) return;
-  applyEdgeDock(pane, 'right');
+  // The notes pane lives as a right-side panel on desktop: snap it into the
+  // right-half tile so the chat reflows into the complementary left half (the
+  // tiling replacement for the old modalSnap right edge-dock). zoneByName reuses
+  // tileManager's private safe-rect math so we don't replicate it here.
+  snapModalToZone(pane, zoneByName('right-half'));
 }
 
 function _loadPendingHighlights() {

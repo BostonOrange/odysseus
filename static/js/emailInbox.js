@@ -5,9 +5,8 @@
 
 import spinnerModule from './spinner.js';
 import sessionModule from './sessions.js';
-import { initEmailLibrary, openEmailLibrary, closeEmailLibrary, isOpen as isLibOpen, prewarmEmailLibrary } from './emailLibrary.js';
+import { initEmailLibrary, openEmailLibrary, closeEmailLibrary, isOpen as isLibOpen, prewarmEmailLibrary, tileEmailLeftForDocument } from './emailLibrary.js';
 import * as Modals from './modalManager.js';
-import { applyEdgeDock } from './modalSnap.js';
 import { buildReplyAllCc } from './emailLibrary/replyRecipients.js';
 
 const API_BASE = window.location.origin;
@@ -91,8 +90,8 @@ export function init(documentModule) {
     documentModule,
     onEmailClick: async (opts) => {
       // Reply / AI Reply / Compose open a draft in the doc editor.
-      //  - Desktop: dock the email to the LEFT so it stays visible beside the
-      //    reply draft (which opens on the right) — read-while-you-reply.
+      //  - Desktop: tile the email into the LEFT half so it stays visible beside
+      //    the reply draft (which fills the right half) — read-while-you-reply.
       //  - Mobile: there's no room for a split, so minimize the email modal;
       //    the draft comes to the front and the inbox stays a tap away as a
       //    minimized chip.
@@ -101,7 +100,7 @@ export function init(documentModule) {
         if (Modals.isRegistered('email-lib-modal')) {
           const emailModal = document.getElementById('email-lib-modal');
           if (window.innerWidth > 768 && emailModal && !emailModal.classList.contains('hidden')) {
-            applyEdgeDock(emailModal, 'left');
+            tileEmailLeftForDocument(emailModal);
           }
           // Mobile: do NOT pre-mount the pane here. The load path (open/inject)
           // mounts it exactly once when the doc is ready; the doc-view z-index
@@ -132,10 +131,10 @@ export async function openReplyDraft(uid, folder = 'INBOX', mode = 'reply') {
 }
 
 // When the document editor pane opens (body.doc-view turns on), make sure the
-// email modal is on the LEFT — even if it was previously docked RIGHT or
-// floating — so the email and the doc always end up side-by-side. The actual
-// width math lives in modalSnap.js (`_anchorLeftDock` shrinks the email when
-// the doc is rendered to the right).
+// email modal is tiled to the LEFT half — even if it was previously floating —
+// so the email and the doc always end up side-by-side. tileEmailLeftForDocument
+// (emailLibrary.js) snaps the email via tileManager and publishes the split
+// seam so the doc pane fills the right half.
 let _docOpenObs = null;
 function _watchDocOpenToReDockEmail() {
   if (_docOpenObs) return;
@@ -147,17 +146,17 @@ function _watchDocOpenToReDockEmail() {
       if (window.innerWidth > 768) {
         const emailModal = document.getElementById('email-lib-modal');
         if (emailModal && !emailModal.classList.contains('hidden')) {
-          // Already left-docked → nothing to do (modalSnap re-anchors on its own).
-          if (!emailModal.classList.contains('modal-left-docked')) {
-            try { applyEdgeDock(emailModal, 'left'); } catch (_) {}
+          // Already tiled left → nothing to do.
+          if (emailModal.querySelector('.modal-content')?.dataset._tileZone !== 'left-half') {
+            try { tileEmailLeftForDocument(emailModal); } catch (_) {}
           }
         }
         // Same treatment for an open email-reader modal (one specific email
         // open standalone — typical "click email, click doc" flow).
         document.querySelectorAll('.modal[id^="email-reader-"]').forEach(m => {
           if (m.classList.contains('hidden')) return;
-          if (m.classList.contains('modal-left-docked')) return;
-          try { applyEdgeDock(m, 'left'); } catch (_) {}
+          if (m.querySelector('.modal-content')?.dataset._tileZone === 'left-half') return;
+          try { tileEmailLeftForDocument(m); } catch (_) {}
         });
       }
     }
