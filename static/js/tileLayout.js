@@ -6,6 +6,11 @@
  * "1,1"=bottom-right.
  */
 
+// The canvas is split into a fixed 2x2 grid of cells. Naming the dimensions
+// keeps the halving math below from being a bare literal.
+const GRID_COLS = 2;
+const GRID_ROWS = 2;
+
 // Which cells a snap zone occupies. maximize/fullscreen cover all four
 // (for chat-occlusion the fullscreen tool hides the chat entirely).
 const ZONE_CELLS = {
@@ -41,8 +46,8 @@ const CANDIDATES = [
 
 // Convert a set of cells (assumed to form a rectangle) to a pixel rect.
 function _cellsToRect(cells, canvas) {
-  const halfW = canvas.width / 2;
-  const halfH = canvas.height / 2;
+  const halfW = canvas.width / GRID_COLS;
+  const halfH = canvas.height / GRID_ROWS;
   const cols = cells.map((k) => Number(k.split(',')[0]));
   const rows = cells.map((k) => Number(k.split(',')[1]));
   const minC = Math.min(...cols), maxC = Math.max(...cols);
