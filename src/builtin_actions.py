@@ -12,6 +12,7 @@ from typing import Tuple
 
 from src.auth_helpers import owner_filter
 from core.platform_compat import IS_WINDOWS, find_bash
+from src.email_labeling.thinking_classifier import classify_email_json, normalize_verdict
 
 logger = logging.getLogger(__name__)
 
@@ -1487,6 +1488,31 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
             return "No LLM endpoint available", False
         candidates = [(url, model, headers)] + resolve_utility_fallback_candidates(owner=owner)
 
+        # ── Dynamic label registry (Plan 2) — per-owner taxonomy the model can
+        # reuse or grow; seeded from the legacy fixed tags. Degrades gracefully:
+        # any failure here leaves core triage (score/spam/fixed tags) untouched.
+        _label_cfg = _label_registry = _label_names = None
+        _labels_created = 0
+        try:
+            from src.settings import get_setting, get_user_setting
+            from src.email_labeling.registry import LabelRegistry
+            from src.email_labeling.apply import apply_dynamic_labels
+            from src.email_labeling.embed import embed_names
+            _label_cfg = {
+                "auto_create": bool(get_user_setting("email_auto_create_labels", owner, False)),
+                "cap": int(get_setting("email_label_cap", 50)),
+                "confidence_min": float(get_setting("email_label_confidence_min", 0.7)),
+                "dedup_cosine": float(get_setting("email_label_dedup_cosine", 0.85)),
+                "new_per_run": int(get_setting("email_label_new_per_run", 3)),
+            }
+            _label_registry = LabelRegistry(owner)
+            if _label_registry.count() == 0:
+                _label_registry.seed(sorted(CATEGORY_TAGS))
+            _label_names = _label_registry.list_names()
+        except Exception as _le:
+            logger.warning("dynamic label registry setup failed; skipping dynamic labels: %s", _le)
+            _label_cfg = None
+
         # ── 2. Enumerate enabled accounts. Match this task's owner AND fall
         # back to the legacy "unowned account whose imap_user / from_address
         # == this owner" pattern — same rule `_get_email_config` uses, so a
@@ -1651,52 +1677,41 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
                     f"Email:\nFrom: {item.get('from','')}\nSubject: {item.get('subject','')}\n"
                     f"Snippet:\n{item.get('body','')}\n"
                 )
-                try:
-                    raw = await llm_call_async_with_fallback(
-                        candidates,
-                        [{"role": "user", "content": prompt}],
-                        temperature=0.1, max_tokens=220, timeout=30,
+                if _label_names:
+                    prompt += (
+                        "\nAlso include \"labels\": a JSON array of "
+                        "{\"name\":\"<short lowercase topic>\",\"confidence\":0-1}. "
+                        "Reuse an existing label when one fits: "
+                        + ", ".join(_label_names)
+                        + ". Only propose a NEW name when none fit.\n"
                     )
-                    # Tolerant JSON-parse: strip code fences if present.
-                    txt = (raw or "").strip()
-                    if txt.startswith("```"):
-                        txt = txt.strip("`")
-                        # Drop a leading "json\n" or any tag.
-                        nl = txt.find("\n")
-                        if nl >= 0:
-                            txt = txt[nl + 1:]
-                    # Find first { ... } in the response.
-                    s = txt.find("{")
-                    e = txt.rfind("}")
-                    if s < 0 or e <= s:
+                try:
+                    obj = await classify_email_json(candidates, prompt, max_tokens=1024, timeout=30)
+                    if obj is None:
                         failed_classifications.append({
                             "subject": item.get("subject") or "(no subject)",
                             "from": item.get("from") or "",
                             "reason": "model returned no JSON",
                         })
                         continue
-                    obj = _json.loads(txt[s:e + 1])
-                    score = int(obj.get("score", 0))
-                    reason = str(obj.get("reason", ""))[:200]
-                    raw_tags = obj.get("tags") or []
-                    if isinstance(raw_tags, str):
-                        raw_tags = [raw_tags]
-                    tags = []
-                    for t in raw_tags:
-                        if not isinstance(t, str):
-                            continue
-                        tag = t.strip().lower().replace("_", "-")
-                        if tag == "promo":
-                            tag = "marketing"
-                        if tag in CATEGORY_TAGS and tag not in tags:
-                            tags.append(tag)
-                    _spam_raw = obj.get("spam")
-                    if isinstance(_spam_raw, bool):
-                        spam = _spam_raw
-                    elif isinstance(_spam_raw, (int, float)):
-                        spam = bool(_spam_raw)
-                    else:
-                        spam = str(_spam_raw or "").strip().lower() in {"1", "true", "yes", "y"}
+                    _verdict = normalize_verdict(obj, CATEGORY_TAGS)
+                    score = _verdict["score"]
+                    reason = _verdict["reason"]
+                    tags = _verdict["tags"]
+                    spam = _verdict["spam"]
+                    # Dynamic labels: reconcile model proposals -> reuse/create/suggest,
+                    # merge applied/created names into tags (Plan 2; internal only).
+                    if _label_cfg is not None:
+                        try:
+                            tags, _nc = apply_dynamic_labels(
+                                obj.get("labels") or [], tags, _label_names, _label_registry,
+                                _label_cfg, created_so_far=_labels_created,
+                                message_id=(item.get("message_id") or "").strip(),
+                                embed_fn=embed_names,
+                            )
+                            _labels_created += _nc
+                        except Exception as _ae:
+                            logger.debug("dynamic label apply failed: %s", _ae)
                     _blob = f"{item.get('headers','')}\n{item.get('subject','')}\n{item.get('body','')}".lower()
                     if _re.search(r"\b(i'?m|i am|im|we'?re|we are)\s+outside\b", _blob) or _re.search(
                         r"\b(waiting outside|at the door|locked out|can'?t get in|cannot get in)\b", _blob

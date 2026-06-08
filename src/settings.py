@@ -162,6 +162,14 @@ DEFAULT_SETTINGS = {
         "Newsletters, marketing, automated digests, and FYI-only updates are "
         "NOT urgent."
     ),
+    # Dynamic email labels (Plan 2): opt-in auto-create + sprawl guardrails.
+    "email_auto_create_labels": False,
+    "email_label_cap": 50,
+    "email_label_confidence_min": 0.7,
+    "email_label_dedup_cosine": 0.85,
+    "email_label_new_per_run": 3,
+    # Plan 3: write applied labels to real Gmail via X-GM-LABELS. OFF until you opt in.
+    "email_apply_gmail_labels": False,
     # Keyboard shortcuts (action: key combination)
     "keybinds": {
         "search": "ctrl+k",
@@ -247,6 +255,8 @@ _PER_USER_KEYS = {
     "default_endpoint_id", "default_model", "default_model_fallbacks",
     "utility_endpoint_id", "utility_model", "utility_model_fallbacks",
     "research_endpoint_id", "research_model",
+    "email_auto_create_labels",
+    "email_apply_gmail_labels",
 }
 
 
