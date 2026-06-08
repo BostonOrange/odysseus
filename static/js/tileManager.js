@@ -372,10 +372,15 @@ function _rectForZone(name, safe = _viewportSafeRect()) {
 // Re-clamp every currently-snapped window so it keeps filling its zone after
 // the safe-rect changes (viewport resize, sidebar toggle, etc.).
 function _reclampAll(animate = false) {
-  // Re-clamp every tiled element EXCEPT #doc-editor-pane, which manages its own
-  // geometry via the email-doc split CSS vars (clamping it here would fight
-  // emailLibrary). Covers externally-driven tiles like #notes-pane too.
-  document.querySelectorAll('[data-_tile-zone]:not(#doc-editor-pane)').forEach(c => {
+  // Re-clamp every tiled element EXCEPT the two panes that own their own
+  // geometry. #doc-editor-pane is driven by the email-doc split CSS vars
+  // (clamping here would fight emailLibrary). #notes-pane snaps the 'fullscreen'
+  // zone with a CUSTOM rect (_notesFullscreenSafeRect) that deliberately
+  // reserves the sidebar/icon-rail/hamburger; re-deriving the rect from the zone
+  // NAME here returns a true viewport-covering rect, which would snap fullscreen
+  // Notes over that navigation chrome on every resize/sidebar toggle. Both still
+  // count toward chat occupancy in _reflowChat — only their geometry is theirs.
+  document.querySelectorAll('[data-_tile-zone]:not(#doc-editor-pane):not(#notes-pane)').forEach(c => {
     const name = c.dataset._tileZone;
     if (!name) return;
     const r = _rectForZone(name);
