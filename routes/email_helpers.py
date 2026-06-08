@@ -394,6 +394,27 @@ def _init_scheduled_db():
             PRIMARY KEY (message_id, owner)
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS label_registry (
+            owner TEXT NOT NULL DEFAULT '',
+            name TEXT NOT NULL,
+            normalized TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'model',
+            created_at TEXT,
+            PRIMARY KEY (owner, normalized)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS label_suggestions (
+            owner TEXT NOT NULL DEFAULT '',
+            name TEXT NOT NULL,
+            example_message_id TEXT,
+            count INTEGER DEFAULT 1,
+            first_seen TEXT,
+            last_seen TEXT,
+            PRIMARY KEY (owner, name)
+        )
+    """)
     # Backfill migration: older installs created the table with
     # message_id as a bare PK and no owner column. Add the column +
     # promote it into the PK by rebuild-copy-swap (SQLite can't ALTER PK).
