@@ -8,7 +8,7 @@ import { spawnConfetti } from './compare/vote.js';
 import * as Modals from './modalManager.js';
 import { attachColorPicker } from './colorPicker.js';
 import { makeWindowDraggable } from './windowDrag.js';
-import { snapModalToZone, releaseTile } from './tileManager.js';
+import { snapModalToZone, releaseTile, zoneByName } from './tileManager.js';
 
 const API_BASE = window.location.origin;
 let _open = false;
@@ -150,34 +150,6 @@ function _notesFullscreenSafeRect() {
   return { left, top: 0, width: right - left, height: vh };
 }
 
-// Inset matching tileManager._viewportSafeRect's 4px edge margin so an
-// externally-driven snap lands exactly on the tile grid. (No magic numbers.)
-const VIEWPORT_SAFE_MARGIN_PX = 4;
-
-// Right-half snap zone, computed with the same sidebar / icon-rail-aware math
-// as tileManager._viewportSafeRect so the snap lands exactly on the tile grid
-// (and tileManager._reclampAll keeps it aligned on resize). That helper is
-// module-private, so replicating its math here is the supported pattern
-// (emailLibrary._canvasHalves does the same to drive its own snapModalToZone).
-function _notesRightHalfZone() {
-  const sidebar = document.getElementById('sidebar');
-  const rail = document.querySelector('.icon-rail') || document.querySelector('#icon-rail');
-  let leftEdge = 0;
-  const sb = sidebar?.getBoundingClientRect?.();
-  if (sb && sb.right > 0 && !sidebar.classList.contains('hidden')) leftEdge = Math.max(leftEdge, sb.right);
-  const rr = rail?.getBoundingClientRect?.();
-  if (rr && rr.right > 0) leftEdge = Math.max(leftEdge, rr.right);
-  const safe = {
-    left: leftEdge + VIEWPORT_SAFE_MARGIN_PX,
-    top: VIEWPORT_SAFE_MARGIN_PX,
-    right: window.innerWidth - VIEWPORT_SAFE_MARGIN_PX,
-    bottom: window.innerHeight - VIEWPORT_SAFE_MARGIN_PX,
-  };
-  const W = safe.right - safe.left;
-  const H = safe.bottom - safe.top;
-  return { name: 'right-half', rect: { left: safe.left + W / 2, top: safe.top, width: W / 2, height: H } };
-}
-
 function _wireNotesWindow(pane) {
   if (!pane || pane.dataset.windowDragWired === '1') return;
   const header = pane.querySelector('.notes-pane-header');
@@ -221,8 +193,9 @@ function _restoreNotesSidebarDock(pane) {
   if (!pane.isConnected) return;
   // The notes pane lives as a right-side panel on desktop: snap it into the
   // right-half tile so the chat reflows into the complementary left half (the
-  // tiling replacement for the old modalSnap right edge-dock).
-  snapModalToZone(pane, _notesRightHalfZone());
+  // tiling replacement for the old modalSnap right edge-dock). zoneByName reuses
+  // tileManager's private safe-rect math so we don't replicate it here.
+  snapModalToZone(pane, zoneByName('right-half'));
 }
 
 function _loadPendingHighlights() {
