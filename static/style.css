@@ -836,6 +836,17 @@ body.bg-pattern-sparkles {
       transition: left 0.12s ease, top 0.12s ease, width 0.12s ease, height 0.12s ease, opacity 0.12s, transform 0.12s;
     }
     #tile-ghost.visible { opacity: 1; transform: scale(1); }
+    /* Draggable grid resize seams (vertical + horizontal). Shown only when a
+       divider is a real boundary between two tiles/chat; positioned in JS.
+       z-index 500 keeps the seam grabbable above tiled tool windows (<=300). */
+    .tile-seam {
+      position: fixed; z-index: 500; display: none; touch-action: none;
+      background: linear-gradient(var(--seam-dir, to right), transparent 0 3px,
+        color-mix(in srgb, var(--accent, var(--red)) 38%, transparent) 3px 7px,
+        transparent 7px 10px);
+    }
+    .tile-seam-x { width: 10px; cursor: col-resize; --seam-dir: to right; }
+    .tile-seam-y { height: 10px; cursor: row-resize; --seam-dir: to bottom; }
     /* Bottom dock — chip per minimized modal */
     #minimized-dock {
       position: fixed; bottom: var(--composer-clearance, 12px); left: 50%; transform: translateX(-50%);

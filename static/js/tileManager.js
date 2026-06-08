@@ -23,7 +23,7 @@
  * the original size.
  */
 
-import { cellsForZone, largestFreeRect, rectForCells } from './tileLayout.js';
+import { cellsForZone, largestFreeRect, rectForCells, freeCellsForChat } from './tileLayout.js';
 
 const EDGE_THRESHOLD_PX = 24;     // how close to an edge counts as "near"
 const CORNER_THRESHOLD_PX = 64;   // corner box size
@@ -326,6 +326,7 @@ function _reflowChat(animate = false) {
     // Mobile: chat is full-screen; drop any tile inline styles we set.
     ['position', 'left', 'top', 'width', 'height', 'max-height'].forEach(p => chat.style.removeProperty(p));
     chat.style.removeProperty('display');
+    _positionSeams();
     return;
   }
   const occupied = [];
@@ -341,7 +342,7 @@ function _reflowChat(animate = false) {
   const safe = _viewportSafeRect();
   const canvas = { left: safe.left, top: safe.top, width: safe.right - safe.left, height: safe.bottom - safe.top };
   const rect = largestFreeRect(occupied, canvas, _splitX, _splitY);
-  if (!rect) { chat.style.display = 'none'; return; }
+  if (!rect) { chat.style.display = 'none'; _positionSeams(); return; }
   chat.style.removeProperty('display');
   if (animate) {
     chat.style.transition = `left ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), top ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), width ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), height ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1)`;
@@ -353,6 +354,7 @@ function _reflowChat(animate = false) {
   chat.style.setProperty('width', rect.width + 'px', 'important');
   chat.style.setProperty('height', rect.height + 'px', 'important');
   chat.style.setProperty('max-height', rect.height + 'px', 'important');
+  _positionSeams();
 }
 
 // Resolve a named zone to its pixel rect for the CURRENT safe-rect. Single
@@ -473,6 +475,113 @@ function _reflowChatThrottled(animate) {
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', _watchTiledClose);
 } else { _watchTiledClose(); }
+
+// ── Resizable grid seams ──────────────────────────────────────────────────
+// Two global split fractions (_splitX/_splitY) define the grid. Dragging a seam
+// moves the shared divider so every tile + the chat on that axis rebalance.
+
+// 2x2 ownership grid: each cell -> owner id ('chat', a tile's id, or null). A
+// divider is a real (draggable) boundary only where two DIFFERENT non-null
+// owners meet across it — so a single tile spanning both columns shows no seam.
+function _ownerGrid() {
+  const grid = { '0,0': null, '1,0': null, '0,1': null, '1,1': null };
+  document.querySelectorAll('[data-_tile-zone]').forEach((c, i) => {
+    const id = c.id || ('tile' + i);
+    cellsForZone(c.dataset._tileZone).forEach((k) => { grid[k] = id; });
+  });
+  const occupied = Object.keys(grid).filter((k) => grid[k] !== null);
+  const chatCells = freeCellsForChat(occupied);
+  if (chatCells) chatCells.forEach((k) => { grid[k] = 'chat'; });
+  return grid;
+}
+function _axisDivided() {
+  const g = _ownerGrid();
+  const diff = (a, b) => g[a] !== null && g[b] !== null && g[a] !== g[b];
+  return {
+    x: diff('0,0', '1,0') || diff('0,1', '1,1'),
+    y: diff('0,0', '0,1') || diff('1,0', '1,1'),
+  };
+}
+
+let _seamX = null, _seamY = null;
+function _ensureSeams() {
+  if (_seamX) return;
+  _seamX = document.createElement('div');
+  _seamX.className = 'tile-seam tile-seam-x';
+  _seamY = document.createElement('div');
+  _seamY.className = 'tile-seam tile-seam-y';
+  document.body.appendChild(_seamX);
+  document.body.appendChild(_seamY);
+  _wireSeamDrag(_seamX, 'x');
+  _wireSeamDrag(_seamY, 'y');
+}
+
+// Show/position both seams for the current layout + splits. Safe to call before
+// _ensureSeams (no-ops) and on mobile (hides both).
+function _positionSeams() {
+  if (!_seamX) return;
+  if (!_isDesktop()) { _seamX.style.display = 'none'; _seamY.style.display = 'none'; return; }
+  const safe = _viewportSafeRect();
+  const W = safe.right - safe.left, H = safe.bottom - safe.top;
+  const div = _axisDivided();
+  if (div.x) {
+    const x = safe.left + W * _splitX;
+    _seamX.style.display = 'block';
+    _seamX.style.left = (x - 5) + 'px';
+    _seamX.style.top = safe.top + 'px';
+    _seamX.style.height = H + 'px';
+  } else { _seamX.style.display = 'none'; }
+  if (div.y) {
+    const y = safe.top + H * _splitY;
+    _seamY.style.display = 'block';
+    _seamY.style.top = (y - 5) + 'px';
+    _seamY.style.left = safe.left + 'px';
+    _seamY.style.width = W + 'px';
+  } else { _seamY.style.display = 'none'; }
+}
+
+function _wireSeamDrag(handle, axis) {
+  handle.addEventListener('pointerdown', (e) => {
+    if (handle.style.display === 'none') return;
+    e.preventDefault();
+    handle.setPointerCapture?.(e.pointerId);
+    const prevCursor = document.body.style.cursor;
+    document.body.style.cursor = axis === 'x' ? 'col-resize' : 'row-resize';
+    document.body.style.userSelect = 'none';
+    const apply = (ev) => {
+      const safe = _viewportSafeRect();
+      const W = safe.right - safe.left, H = safe.bottom - safe.top;
+      if (axis === 'x') {
+        const minF = MIN_TILE_PX / W, maxF = 1 - minF;
+        _splitX = Math.min(maxF, Math.max(minF, (ev.clientX - safe.left) / W));
+      } else {
+        const minF = MIN_TILE_PX / H, maxF = 1 - minF;
+        _splitY = Math.min(maxF, Math.max(minF, (ev.clientY - safe.top) / H));
+      }
+      // _reclampAll re-clamps every tile to the new split AND calls _reflowChat,
+      // which re-lays the chat and repositions the seams.
+      _reclampAll(false);
+    };
+    const onMove = (ev) => { ev.preventDefault(); apply(ev); };
+    const onUp = (ev) => {
+      try { handle.releasePointerCapture?.(e.pointerId); } catch (_) {}
+      document.removeEventListener('pointermove', onMove, true);
+      document.removeEventListener('pointerup', onUp, true);
+      document.removeEventListener('pointercancel', onUp, true);
+      document.body.style.cursor = prevCursor;
+      document.body.style.userSelect = '';
+      try { localStorage.setItem(axis === 'x' ? SPLIT_X_KEY : SPLIT_Y_KEY, String(axis === 'x' ? _splitX : _splitY)); } catch (_) {}
+      ev.preventDefault();
+    };
+    document.addEventListener('pointermove', onMove, true);
+    document.addEventListener('pointerup', onUp, true);
+    document.addEventListener('pointercancel', onUp, true);
+  });
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _ensureSeams);
+} else { _ensureSeams(); }
 
 // ── Public API for other drag sources (e.g. dragging a minimized dock chip
 // to a screen edge) to reuse the same snap zones + ghost preview + apply. ──
