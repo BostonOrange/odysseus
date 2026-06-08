@@ -372,17 +372,23 @@ function _rectForZone(name, safe = _viewportSafeRect()) {
 // Re-clamp every currently-snapped window so it keeps filling its zone after
 // the safe-rect changes (viewport resize, sidebar toggle, etc.).
 function _reclampAll(animate = false) {
-  // Re-clamp every tiled element EXCEPT the two panes that own their own
-  // geometry. #doc-editor-pane is driven by the email-doc split CSS vars
-  // (clamping here would fight emailLibrary). #notes-pane snaps the 'fullscreen'
-  // zone with a CUSTOM rect (_notesFullscreenSafeRect) that deliberately
-  // reserves the sidebar/icon-rail/hamburger; re-deriving the rect from the zone
-  // NAME here returns a true viewport-covering rect, which would snap fullscreen
-  // Notes over that navigation chrome on every resize/sidebar toggle. Both still
-  // count toward chat occupancy in _reflowChat — only their geometry is theirs.
-  document.querySelectorAll('[data-_tile-zone]:not(#doc-editor-pane):not(#notes-pane)').forEach(c => {
+  // Re-clamp every tiled element EXCEPT panes that own their own geometry.
+  // #doc-editor-pane is driven by the email-doc split CSS vars (clamping here
+  // would fight emailLibrary), so it stays excluded via the selector. #notes-pane
+  // is re-clamped for normal zones (e.g. right-half) — its standard rect IS
+  // correct and must track the safe-rect on resize/sidebar toggle. The ONE case
+  // we skip is its 'fullscreen' zone: notes snaps that with a CUSTOM rect
+  // (_notesFullscreenSafeRect) that deliberately reserves the
+  // sidebar/icon-rail/hamburger, and re-deriving the rect from the zone NAME here
+  // returns a true viewport-covering rect that would snap fullscreen Notes over
+  // that navigation chrome. Both panes still count toward chat occupancy in
+  // _reflowChat — only their geometry is theirs.
+  document.querySelectorAll('[data-_tile-zone]:not(#doc-editor-pane)').forEach(c => {
     const name = c.dataset._tileZone;
     if (!name) return;
+    // Preserve notes' custom chrome-aware fullscreen rect; re-clamp every other
+    // notes zone (right-half, etc.) normally.
+    if (c.id === 'notes-pane' && name === 'fullscreen') return;
     const r = _rectForZone(name);
     if (!r) return;
     if (animate) {
