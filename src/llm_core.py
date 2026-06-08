@@ -1134,7 +1134,8 @@ async def llm_call_async(
     headers: Optional[Dict] = None,
     timeout: int = LLMConfig.STREAM_TIMEOUT,
     max_retries: int = LLMConfig.MAX_RETRIES,
-    prompt_type: Optional[str] = None
+    prompt_type: Optional[str] = None,
+    extra_body: Optional[Dict] = None,
 ) -> str:
     """Asynchronous LLM call using httpx with connection pooling, timeout, retry logic, and performance logging."""
     provider = _detect_provider(url)
@@ -1154,7 +1155,7 @@ async def llm_call_async(
         messages_copy = non_sys
 
     cache_key = _get_cache_key(url, model, messages_copy, temperature, max_tokens)
-    cached_response = _get_cached_response(cache_key)
+    cached_response = None if extra_body else _get_cached_response(cache_key)
     if cached_response:
         logger.debug(f"Returning cached response for key: {cache_key}")
         return cached_response
@@ -1188,6 +1189,8 @@ async def llm_call_async(
         if max_tokens and max_tokens > 0:
             tok_key = "max_completion_tokens" if _uses_max_completion_tokens(model) else "max_tokens"
             payload[tok_key] = max_tokens
+        if extra_body:
+            payload.update(extra_body)
 
     if _is_host_dead(target_url):
         raise HTTPException(503, f"Upstream {_host_key(target_url)} marked unreachable (cooldown active)")
@@ -1223,7 +1226,8 @@ async def llm_call_async(
                 else:
                     msg = data["choices"][0]["message"]
                     response = msg.get("content") or msg.get("reasoning_content") or ""
-                _set_cached_response(cache_key, response)
+                if not extra_body:
+                    _set_cached_response(cache_key, response)
                 return response
             except Exception:
                 raise HTTPException(502, f"Unexpected schema from {target_url}: {str(data)[:400]}")
