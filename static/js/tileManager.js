@@ -256,6 +256,14 @@ function _unsnap(content) {
 }
 
 function _findDragTarget(e) {
+  // Chat tile: dragging its top bar (not a button on it) moves the whole chat,
+  // reusing the same snap/unsnap flow as tool windows. A *pinned* chat carries
+  // dataset._tileZone on #chat-container; an unpinned (auto-fill) chat does not.
+  const chatBar = e.target.closest('.chat-top-bar');
+  if (chatBar && chatBar.closest('#chat-container')) {
+    if (e.target.closest('button')) return null;
+    return document.getElementById('chat-container');
+  }
   const header = e.target.closest('.modal-header');
   if (!header) return null;
   // Skip clicks on header buttons (close, minimize, etc.)

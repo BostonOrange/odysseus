@@ -847,6 +847,21 @@ body.bg-pattern-sparkles {
     }
     .tile-seam-x { width: 10px; cursor: col-resize; --seam-dir: to right; }
     .tile-seam-y { height: 10px; cursor: row-resize; --seam-dir: to bottom; }
+    /* The chat top bar is a drag handle (desktop) — grab it to tile the chat,
+       like a tool window's title bar. Buttons inside keep their pointer cursor. */
+    @media (min-width: 769px) {
+      .chat-top-bar { cursor: move; }
+      .chat-top-bar button { cursor: pointer; }
+      .chat-top-bar::before {
+        content: "⠿";
+        margin-right: 6px;
+        opacity: 0.35;
+        font-size: 13px;
+        line-height: 1;
+        pointer-events: none;
+        align-self: center;
+      }
+    }
     /* Bottom dock — chip per minimized modal */
     #minimized-dock {
       position: fixed; bottom: var(--composer-clearance, 12px); left: 50%; transform: translateX(-50%);
