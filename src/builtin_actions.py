@@ -1488,6 +1488,31 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
             return "No LLM endpoint available", False
         candidates = [(url, model, headers)] + resolve_utility_fallback_candidates(owner=owner)
 
+        # ── Dynamic label registry (Plan 2) — per-owner taxonomy the model can
+        # reuse or grow; seeded from the legacy fixed tags. Degrades gracefully:
+        # any failure here leaves core triage (score/spam/fixed tags) untouched.
+        _label_cfg = _label_registry = _label_names = None
+        _labels_created = 0
+        try:
+            from src.settings import get_setting, get_user_setting
+            from src.email_labeling.registry import LabelRegistry
+            from src.email_labeling.apply import apply_dynamic_labels
+            from src.email_labeling.embed import embed_names
+            _label_cfg = {
+                "auto_create": bool(get_user_setting("email_auto_create_labels", owner, False)),
+                "cap": int(get_setting("email_label_cap", 50)),
+                "confidence_min": float(get_setting("email_label_confidence_min", 0.7)),
+                "dedup_cosine": float(get_setting("email_label_dedup_cosine", 0.85)),
+                "new_per_run": int(get_setting("email_label_new_per_run", 3)),
+            }
+            _label_registry = LabelRegistry(owner)
+            if _label_registry.count() == 0:
+                _label_registry.seed(sorted(CATEGORY_TAGS))
+            _label_names = _label_registry.list_names()
+        except Exception as _le:
+            logger.warning("dynamic label registry setup failed; skipping dynamic labels: %s", _le)
+            _label_cfg = None
+
         # ── 2. Enumerate enabled accounts. Match this task's owner AND fall
         # back to the legacy "unowned account whose imap_user / from_address
         # == this owner" pattern — same rule `_get_email_config` uses, so a
@@ -1652,6 +1677,14 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
                     f"Email:\nFrom: {item.get('from','')}\nSubject: {item.get('subject','')}\n"
                     f"Snippet:\n{item.get('body','')}\n"
                 )
+                if _label_names:
+                    prompt += (
+                        "\nAlso include \"labels\": a JSON array of "
+                        "{\"name\":\"<short lowercase topic>\",\"confidence\":0-1}. "
+                        "Reuse an existing label when one fits: "
+                        + ", ".join(_label_names)
+                        + ". Only propose a NEW name when none fit.\n"
+                    )
                 try:
                     obj = await classify_email_json(candidates, prompt, max_tokens=1024, timeout=30)
                     if obj is None:
@@ -1666,6 +1699,19 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
                     reason = _verdict["reason"]
                     tags = _verdict["tags"]
                     spam = _verdict["spam"]
+                    # Dynamic labels: reconcile model proposals -> reuse/create/suggest,
+                    # merge applied/created names into tags (Plan 2; internal only).
+                    if _label_cfg is not None:
+                        try:
+                            tags, _nc = apply_dynamic_labels(
+                                obj.get("labels") or [], tags, _label_names, _label_registry,
+                                _label_cfg, created_so_far=_labels_created,
+                                message_id=(item.get("message_id") or "").strip(),
+                                embed_fn=embed_names,
+                            )
+                            _labels_created += _nc
+                        except Exception as _ae:
+                            logger.debug("dynamic label apply failed: %s", _ae)
                     _blob = f"{item.get('headers','')}\n{item.get('subject','')}\n{item.get('body','')}".lower()
                     if _re.search(r"\b(i'?m|i am|im|we'?re|we are)\s+outside\b", _blob) or _re.search(
                         r"\b(waiting outside|at the door|locked out|can'?t get in|cannot get in)\b", _blob
