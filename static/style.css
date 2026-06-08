@@ -850,7 +850,9 @@ body.bg-pattern-sparkles {
     /* The chat top bar is a drag handle (desktop) — grab it to tile the chat,
        like a tool window's title bar. Buttons inside keep their pointer cursor. */
     @media (min-width: 769px) {
-      .chat-top-bar { cursor: move; }
+      /* Drag handle: suppress text selection while dragging, matching the
+         user-select:none that windowDrag sets on every tool window's header. */
+      .chat-top-bar { cursor: move; user-select: none; -webkit-user-select: none; }
       .chat-top-bar button { cursor: pointer; }
       .chat-top-bar::before {
         content: "⠿";
