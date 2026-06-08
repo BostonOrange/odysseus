@@ -1240,6 +1240,11 @@ export function minimize(id) {
     // the split down and release the tile so _reflowChat reclaims the space.
     if ((id === 'email-lib-modal' || id.startsWith('email-reader-'))
         && modal.querySelector('.modal-content')?.dataset._tileZone) {
+      // Remember the side-by-side split so restore() can rebuild it: the
+      // teardown below releases the tile + clears the seam, and emailLibrary's
+      // odysseus:modal-opened hook re-tiles the email left on restore when this
+      // flag is present and the document pane is still open.
+      modal.dataset._restoreSplitLeft = '1';
       _clearEmailSplitAfterMinimize(modal);
     }
     modal.classList.add('hidden');
@@ -1535,7 +1540,12 @@ window.addEventListener('modal-dismissed', (e) => {
         || modal.classList.contains('email-snap-left')) {
       try { suspendDock(modal); } catch (err) { console.warn('suspendDock on dismissed failed', err); }
     }
-    if (isEmailModal) _clearEmailSplitAfterMinimize(modal);
+    if (isEmailModal) {
+      // Same restore-the-split contract as minimize(): tag a tiled email so the
+      // odysseus:modal-opened hook re-tiles it left on restore.
+      if (modal.querySelector('.modal-content')?.dataset._tileZone) modal.dataset._restoreSplitLeft = '1';
+      _clearEmailSplitAfterMinimize(modal);
+    }
     modal.classList.add('modal-minimized');
   }
   _ensureDock();

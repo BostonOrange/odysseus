@@ -393,6 +393,9 @@ export function tileEmailLeftForDocument(modal) {
   if (!modal || modal.classList.contains('hidden')) return false;
   const content = modal.querySelector('.modal-content');
   if (!content) return false;
+  // Install the re-anchor hooks (resize / sidebar / minimize-restore) the first
+  // time a split is created so the seam stays glued to the email's tiled edge.
+  _wireEmailDocumentSplitReanchor();
   // Drop any legacy overlay-dock state so the tile is the sole geometry owner.
   modal.classList.remove('email-snap-left');
   const halves = _canvasHalves();
@@ -459,6 +462,70 @@ function _scheduleEmailDocumentSplitMeasure(modal) {
   });
   setTimeout(() => _measureEmailDocumentSplit(modal), 260);
   setTimeout(() => _measureEmailDocumentSplit(modal), 700);
+}
+
+// The currently-tiled email modal (left-half) backing an active split, or null.
+function _tiledEmailSplitModal() {
+  const content = document.querySelector(
+    "#email-lib-modal .modal-content[data-_tile-zone='left-half'], "
+    + ".modal[id^='email-reader-'] .modal-content[data-_tile-zone='left-half']"
+  );
+  const modal = content?.closest?.('.modal');
+  return (modal && !modal.classList.contains('hidden')) ? modal : null;
+}
+
+// Re-anchor the split seam after the tiling canvas re-clamps. tileManager's
+// _reclampAll re-clamps the email's left-half tile on viewport resize and
+// sidebar toggle (its right edge moves) but deliberately excludes
+// #doc-editor-pane and never re-runs the split measure — so without this the
+// doc pane's inline `left` and --email-doc-split-right-x stay pinned to the OLD
+// seam, opening a gap (viewport/sidebar shrank) or an overlap (grew). Restores
+// the re-anchor the old modalSnap _leftDockNavObs provided. Re-SCHEDULES the
+// measure (rAF + settle timeouts) rather than measuring once, so the doc pane
+// lands correctly whether the re-clamp was instant (resize) or animated
+// (sidebar toggle).
+function _reanchorEmailDocumentSplit() {
+  if (window.innerWidth <= 768) return;
+  if (!document.body.classList.contains('email-doc-split-active')) return;
+  const modal = _tiledEmailSplitModal();
+  if (modal) _scheduleEmailDocumentSplitMeasure(modal);
+}
+
+let _emailSplitReanchorWired = false;
+function _wireEmailDocumentSplitReanchor() {
+  if (_emailSplitReanchorWired) return;
+  _emailSplitReanchorWired = true;
+  // Resize fires this handler in the SAME event as tileManager's resize
+  // listener, which was registered first (this module imports tileManager, so
+  // tileManager evaluates first). rAF callbacks run in scheduling order, so the
+  // re-clamp's rAF runs before our measure's rAF and we read the new edge.
+  window.addEventListener('resize', _reanchorEmailDocumentSplit);
+  // Sidebar show/hide/side-swap changes the safe-rect → tileManager re-clamps
+  // the email; watch the same signal and re-anchor the doc pane to match.
+  const wireSidebar = () => {
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar) { requestAnimationFrame(wireSidebar); return; }
+    new MutationObserver(_reanchorEmailDocumentSplit)
+      .observe(sidebar, { attributes: true, attributeFilter: ['class'] });
+  };
+  wireSidebar();
+  // Rebuild the side-by-side split when a tiled email is restored from the
+  // dock. minimize() (modalManager) tears the split down + releaseTile()s the
+  // email so the chat reclaims the half while minimized, and tags the modal
+  // with dataset._restoreSplitLeft. restore() re-shows the modal and fires
+  // odysseus:modal-opened, but nothing re-tiles it — so without this the email
+  // returns as a centred floating window over the doc pane. Re-tile it iff the
+  // document pane is still open (otherwise leave it floating).
+  window.addEventListener('odysseus:modal-opened', (e) => {
+    const id = e?.detail?.id;
+    const modal = e?.detail?.modal;
+    if (!modal || (id !== 'email-lib-modal' && !id?.startsWith?.('email-reader-'))) return;
+    if (modal.dataset._restoreSplitLeft !== '1') return;
+    delete modal.dataset._restoreSplitLeft;
+    if (window.innerWidth <= 768) return;
+    if (!document.body.classList.contains('doc-view')) return;
+    try { tileEmailLeftForDocument(modal); } catch (_) {}
+  });
 }
 
 function _clearEmailDocumentSplit() {
