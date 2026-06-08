@@ -324,11 +324,14 @@ function _reflowChat(animate = false) {
     return;
   }
   const occupied = [];
-  // `#doc-editor-pane` is the right-half leaf of the email+document split: it
-  // is a real tile for OCCUPANCY (so the chat hides when both halves are
-  // filled) even though it owns its own geometry via the email-doc split rule
-  // rather than tileManager's snap clamp.
-  document.querySelectorAll('.modal-content[data-_tile-zone], .research-pane[data-_tile-zone], #doc-editor-pane[data-_tile-zone]')
+  // Every element carrying data-_tile-zone counts as a tile for OCCUPANCY: a
+  // snapped .modal-content / .research-pane, an externally-driven pane such as
+  // #notes-pane, or #doc-editor-pane (the right-half leaf of the email+document
+  // split — a real tile for occupancy even though it owns its own geometry via
+  // the email-doc split CSS rule rather than tileManager's snap clamp). Counting
+  // them all lets the chat reflow into whatever they leave free, and hide when
+  // they cover everything.
+  document.querySelectorAll('[data-_tile-zone]')
     .forEach(c => { occupied.push(...cellsForZone(c.dataset._tileZone)); });
   const safe = _viewportSafeRect();
   const canvas = { left: safe.left, top: safe.top, width: safe.right - safe.left, height: safe.bottom - safe.top };
@@ -347,27 +350,36 @@ function _reflowChat(animate = false) {
   chat.style.setProperty('max-height', rect.height + 'px', 'important');
 }
 
+// Resolve a named zone to its pixel rect for the CURRENT safe-rect. Single
+// source of truth shared by _reclampAll (re-clamp on resize) and the public
+// zoneByName() helper (external callers re-applying a remembered tile).
+function _rectForZone(name, safe = _viewportSafeRect()) {
+  const W = safe.right - safe.left, H = safe.bottom - safe.top;
+  switch (name) {
+    case 'fullscreen':   return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+    case 'maximize':     return { left: safe.left, top: safe.top, width: W, height: H };
+    case 'left-half':    return { left: safe.left, top: safe.top, width: W/2, height: H };
+    case 'right-half':   return { left: safe.left + W/2, top: safe.top, width: W/2, height: H };
+    case 'bottom-half':  return { left: safe.left, top: safe.top + H/2, width: W, height: H/2 };
+    case 'top-left':     return { left: safe.left, top: safe.top, width: W/2, height: H/2 };
+    case 'top-right':    return { left: safe.left + W/2, top: safe.top, width: W/2, height: H/2 };
+    case 'bottom-left':  return { left: safe.left, top: safe.top + H/2, width: W/2, height: H/2 };
+    case 'bottom-right': return { left: safe.left + W/2, top: safe.top + H/2, width: W/2, height: H/2 };
+    default: return null;
+  }
+}
+
 // Re-clamp every currently-snapped window so it keeps filling its zone after
 // the safe-rect changes (viewport resize, sidebar toggle, etc.).
 function _reclampAll(animate = false) {
-  document.querySelectorAll('.modal-content[data-_tile-zone], .research-pane[data-_tile-zone]').forEach(c => {
+  // Re-clamp every tiled element EXCEPT #doc-editor-pane, which manages its own
+  // geometry via the email-doc split CSS vars (clamping it here would fight
+  // emailLibrary). Covers externally-driven tiles like #notes-pane too.
+  document.querySelectorAll('[data-_tile-zone]:not(#doc-editor-pane)').forEach(c => {
     const name = c.dataset._tileZone;
     if (!name) return;
-    const safe = _viewportSafeRect();
-    const W = safe.right - safe.left, H = safe.bottom - safe.top;
-    let r;
-    switch (name) {
-      case 'fullscreen':     r = { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight }; break;
-      case 'maximize':       r = { left: safe.left, top: safe.top, width: W, height: H }; break;
-      case 'left-half':      r = { left: safe.left, top: safe.top, width: W/2, height: H }; break;
-      case 'right-half':     r = { left: safe.left + W/2, top: safe.top, width: W/2, height: H }; break;
-      case 'bottom-half':    r = { left: safe.left, top: safe.top + H/2, width: W, height: H/2 }; break;
-      case 'top-left':       r = { left: safe.left, top: safe.top, width: W/2, height: H/2 }; break;
-      case 'top-right':      r = { left: safe.left + W/2, top: safe.top, width: W/2, height: H/2 }; break;
-      case 'bottom-left':    r = { left: safe.left, top: safe.top + H/2, width: W/2, height: H/2 }; break;
-      case 'bottom-right':   r = { left: safe.left + W/2, top: safe.top + H/2, width: W/2, height: H/2 }; break;
-      default: return;
-    }
+    const r = _rectForZone(name);
+    if (!r) return;
     if (animate) {
       c.style.transition = `left ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), top ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), width ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), height ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1)`;
       setTimeout(() => { c.style.transition = ''; }, SNAP_ANIM_CLEAR_MS);
@@ -483,6 +495,17 @@ export function releaseTile(content) {
   delete content.dataset._tileZone;
   delete content.dataset._tilePreSnap;
   _reflowChat(true);
+}
+
+// Resolve a zone NAME (e.g. 'left-half', 'right-half', 'maximize') to a
+// {name, rect} for the current viewport. Lets external callers re-apply a
+// remembered tile without replicating the private safe-rect math — the tiling
+// equivalent of the old modalSnap "re-apply a remembered dock side" path.
+// Returns null for an unrecognized name.
+export function zoneByName(name) {
+  if (!_isDesktop()) return null;
+  const rect = _rectForZone(name);
+  return rect ? { name, rect } : null;
 }
 
 // Snap a modal (its .modal-content) into a previously-detected zone.

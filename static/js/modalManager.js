@@ -25,9 +25,37 @@
  *   }
  */
 
-import { previewZoneAt, clearPreview, snapModalToZone, releaseTile } from './tileManager.js';
-import { suspendDock, resumeDock, clearRightDock, applyEdgeDock } from './modalSnap.js';
+import { previewZoneAt, clearPreview, snapModalToZone, releaseTile, zoneByName } from './tileManager.js';
 import { dismissOrRemove } from './escMenuStack.js';
+
+// Email modals carry their OWN split-rebuild contract (dataset._restoreSplitLeft
+// + emailLibrary's odysseus:modal-opened hook), so the generic tile
+// suspend/resume below must skip them.
+function _isEmailModalId(id) {
+  return id === 'email-lib-modal' || (typeof id === 'string' && id.startsWith('email-reader-'));
+}
+
+// Tiling replacement for the old modalSnap suspendDock/resumeDock. A minimized
+// tiled window must RELEASE its tile so the chat reclaims the freed canvas while
+// the window is hidden, then RE-SNAP to the same zone when restored. The zone
+// name is stashed on the modal so restore() can rebuild it.
+function _suspendTile(modal, content) {
+  const c = content || modal?.querySelector?.('.modal-content');
+  const zone = c?.dataset?._tileZone;
+  if (!c || !zone) return null;
+  modal.dataset._suspendedTileZone = zone;
+  try { releaseTile(c); } catch (e) { console.warn('releaseTile on minimize failed', e); }
+  return zone;
+}
+
+function _resumeTile(modal) {
+  const zone = modal?.dataset?._suspendedTileZone;
+  if (!zone) return false;
+  delete modal.dataset._suspendedTileZone;
+  const z = zoneByName(zone); // null on mobile / unknown zone
+  if (z) { try { snapModalToZone(modal, z); } catch (e) { console.warn('re-snap on restore failed', e); } }
+  return !!z;
+}
 
 const _state = new Map(); // id -> { restoreFn, closeFn, railBtnId, isMinimized, restoreMinHeight }
 
@@ -53,7 +81,12 @@ function _applyRememberedDock(id) {
   if (!side) return;
   const modal = document.getElementById(id);
   if (!modal || modal.classList.contains('hidden') || modal.classList.contains('modal-minimized')) return;
-  try { applyEdgeDock(modal, side); } catch (e) { console.warn('apply remembered dock failed', e); }
+  // Re-apply the remembered side as the matching half tile (the tiling
+  // replacement for the old modalSnap edge-dock). zoneByName returns null on
+  // mobile, where tiling is disabled.
+  const zone = zoneByName(side === 'left' ? 'left-half' : 'right-half');
+  if (!zone) return;
+  try { snapModalToZone(modal, zone); } catch (e) { console.warn('apply remembered dock failed', e); }
 }
 
 // Monotonic stacking counter so the most-recently-surfaced tool window always
@@ -1226,30 +1259,22 @@ export function minimize(id) {
   const modal = document.getElementById(id);
   if (modal) {
     _captureRestoreHeight(modal, s);
-    // If this window is edge-docked (right/left), SUSPEND the dock: release
-    // the body push so the chat returns to full width while the window is
-    // minimized, but keep the dock so restoring the chip snaps it back in.
-    if (modal.classList.contains('modal-right-docked')
-        || modal.classList.contains('modal-left-docked')
-        || modal.classList.contains('email-snap-left')) {
-      try { suspendDock(modal); } catch (e) { console.warn('suspendDock on minimize failed', e); }
-    }
-    // A tiled email (left-half) carries no dock class for suspendDock to catch,
-    // so without this its tile would keep occupying the left half after the
-    // modal is hidden and the chat would stay clamped into the right half. Tear
-    // the split down and release the tile so _reflowChat reclaims the space.
-    if ((id === 'email-lib-modal' || id.startsWith('email-reader-'))
-        && modal.querySelector('.modal-content')?.dataset._tileZone) {
-      // Remember the side-by-side split so restore() can rebuild it: the
-      // teardown below releases the tile + clears the seam, and emailLibrary's
-      // odysseus:modal-opened hook re-tiles the email left on restore when this
-      // flag is present and the document pane is still open.
+    const content = modal.querySelector('.modal-content');
+    // Free the window's tile so the chat reclaims the canvas while it's hidden;
+    // a hidden tile still occupies its cells in _reflowChat otherwise. Email
+    // modals run their own split teardown (releases the email + doc-pane tiles
+    // and tags the modal so emailLibrary's odysseus:modal-opened hook rebuilds
+    // the split on restore when the document is still open). Every other tiled
+    // tool uses the generic suspend, which remembers the zone on the modal for
+    // restore() to re-snap.
+    if (_isEmailModalId(id) && content?.dataset._tileZone) {
       modal.dataset._restoreSplitLeft = '1';
       _clearEmailSplitAfterMinimize(modal);
+    } else {
+      _suspendTile(modal, content);
     }
     modal.classList.add('hidden');
     modal.classList.add('modal-minimized');
-    const content = modal.querySelector('.modal-content');
     if (content) {
       content.classList.remove('sheet-ready', 'modal-closing');
       content.style.transform = '';
@@ -1276,9 +1301,11 @@ export function restore(id) {
     // should bring this tool to the front, not leave it stuck behind one with
     // a higher static z-index.
     _bringToFront(modal);
-    // If the window was edge-docked when minimized, re-apply the dock so the
-    // chat nudges back in and the window returns exactly where it was.
-    try { resumeDock(modal); } catch (e) { console.warn('resumeDock on restore failed', e); }
+    // If the window was tiled when minimized, re-snap it into the same zone so
+    // the chat reflows back out. (Email modals carry dataset._restoreSplitLeft
+    // instead and are rebuilt by emailLibrary's odysseus:modal-opened hook
+    // below, so _resumeTile is a no-op for them.)
+    _resumeTile(modal);
     _emitModalOpened(id, modal);
   }
   s.isMinimized = false;
@@ -1314,10 +1341,17 @@ export function close(id) {
   if (!s) return;
   const modalBeforeClose = document.getElementById(id);
   const contentBeforeClose = modalBeforeClose?.querySelector?.('.modal-content');
-  const suspendedDockSide = contentBeforeClose?._dockSuspended
-    || (modalBeforeClose?.classList?.contains('modal-left-docked') ? 'left'
-        : modalBeforeClose?.classList?.contains('modal-right-docked') ? 'right'
-          : null);
+  // Which tile zone the window was in: a minimized window already released its
+  // tile but stashed the zone name on the modal (_suspendedTileZone); a window
+  // closed while still open carries the zone on its content. Only left/right
+  // halves map to a remembered dock side — the close()->reopen "remember my
+  // dock" affordance was always left/right only.
+  const suspendedZone = modalBeforeClose?.dataset?._suspendedTileZone
+    || contentBeforeClose?.dataset?._tileZone
+    || null;
+  const suspendedDockSide = suspendedZone === 'left-half' ? 'left'
+    : suspendedZone === 'right-half' ? 'right'
+      : null;
   const shouldRememberDock = s.isMinimized && !!suspendedDockSide;
   if (shouldRememberDock) _rememberDock(id, suspendedDockSide);
   else _forgetDock(id);
@@ -1330,15 +1364,16 @@ export function close(id) {
   // hit the real open path.
   const modal = document.getElementById(id);
   if (modal) {
-    // Tear down the live dock push/classes before hiding. If this close came
-    // from a minimized dock chip, the side was persisted above and register()
-    // will intentionally re-apply it on the next open.
-    if (modal.classList.contains('modal-right-docked') || modal.classList.contains('modal-left-docked')) {
-      try { clearRightDock(modal); } catch (e) { console.warn('clearRightDock on close failed', e); }
+    const content = modal.querySelector('.modal-content');
+    // Release the live tile before hiding so the chat reclaims the canvas. If
+    // this close came from a minimized dock chip, the side was persisted above
+    // and register() re-applies it on the next open.
+    if (content?.dataset._tileZone) {
+      try { releaseTile(content); } catch (e) { console.warn('releaseTile on close failed', e); }
     }
+    delete modal.dataset._suspendedTileZone;
     modal.classList.add('hidden');
     modal.classList.remove('modal-minimized');
-    const content = modal.querySelector('.modal-content');
     if (content) {
       content.classList.remove('modal-closing', 'sheet-ready');
       content.style.transform = '';
@@ -1534,17 +1569,16 @@ window.addEventListener('modal-dismissed', (e) => {
   _setBadge(s.btnIds, true);
   const modal = document.getElementById(id);
   if (modal) {
-    const isEmailModal = id === 'email-lib-modal' || id.startsWith('email-reader-');
-    if (modal.classList.contains('modal-right-docked')
-        || modal.classList.contains('modal-left-docked')
-        || modal.classList.contains('email-snap-left')) {
-      try { suspendDock(modal); } catch (err) { console.warn('suspendDock on dismissed failed', err); }
-    }
-    if (isEmailModal) {
-      // Same restore-the-split contract as minimize(): tag a tiled email so the
-      // odysseus:modal-opened hook re-tiles it left on restore.
-      if (modal.querySelector('.modal-content')?.dataset._tileZone) modal.dataset._restoreSplitLeft = '1';
+    const content = modal.querySelector('.modal-content');
+    if (_isEmailModalId(id)) {
+      // Same restore-the-split contract as minimize(): tag a tiled email so
+      // emailLibrary's odysseus:modal-opened hook re-tiles it left on restore.
+      if (content?.dataset._tileZone) modal.dataset._restoreSplitLeft = '1';
       _clearEmailSplitAfterMinimize(modal);
+    } else {
+      // Free a generic tiled tool's tile so the chat reclaims the canvas while
+      // it's a dock chip; restore() re-snaps it from the remembered zone.
+      _suspendTile(modal, content);
     }
     modal.classList.add('modal-minimized');
   }
