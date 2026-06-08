@@ -14884,6 +14884,22 @@ body [data-act="from-sender"] {
   display: none !important;
 }
 
+/* Edge docking. Docked panels are fixed to the viewport edge; the workspace
+   panes reserve room with margins so left + right docks can be active at the
+   same time without skewing the entire body box. */
+body.right-dock-active {
+  padding-right: 0;
+}
+body.left-dock-active {
+  padding-left: 0;
+}
+body.left-dock-active:not(.email-doc-split-active) .chat-container {
+  margin-left: var(--left-dock-w, 0px);
+}
+body.right-dock-active .chat-container,
+body.right-dock-active:not(.email-doc-split-active) .doc-editor-pane {
+  margin-right: var(--right-dock-w, 0px);
+}
 
 .modal.modal-right-docked {
   align-items: stretch;
