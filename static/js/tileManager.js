@@ -324,7 +324,11 @@ function _reflowChat(animate = false) {
     return;
   }
   const occupied = [];
-  document.querySelectorAll('.modal-content[data-_tile-zone], .research-pane[data-_tile-zone]')
+  // `#doc-editor-pane` is the right-half leaf of the email+document split: it
+  // is a real tile for OCCUPANCY (so the chat hides when both halves are
+  // filled) even though it owns its own geometry via the email-doc split rule
+  // rather than tileManager's snap clamp.
+  document.querySelectorAll('.modal-content[data-_tile-zone], .research-pane[data-_tile-zone], #doc-editor-pane[data-_tile-zone]')
     .forEach(c => { occupied.push(...cellsForZone(c.dataset._tileZone)); });
   const safe = _viewportSafeRect();
   const canvas = { left: safe.left, top: safe.top, width: safe.right - safe.left, height: safe.bottom - safe.top };
@@ -464,6 +468,21 @@ export function previewZoneAt(x, y, target = null) {
 export function clearPreview() {
   _hideGhost();
   _activeZone = null;
+}
+
+// Release a tiled element back to a free-floating window: drop the tile flag +
+// the pre-snap snapshot and the !important geometry the snap wrote, then
+// reclaim the freed canvas for the chat. For drag sources that dismantle a tile
+// OUTSIDE the pointer-drag flow (e.g. the email/document split tearing itself
+// down on a header click that never moved, or on minimize/dismiss) — where
+// tileManager's own move-threshold unsnap never fires.
+export function releaseTile(content) {
+  if (!content) return;
+  ['position', 'left', 'top', 'width', 'height', 'max-height', 'margin', 'transform']
+    .forEach((p) => content.style.removeProperty(p));
+  delete content.dataset._tileZone;
+  delete content.dataset._tilePreSnap;
+  _reflowChat(true);
 }
 
 // Snap a modal (its .modal-content) into a previously-detected zone.

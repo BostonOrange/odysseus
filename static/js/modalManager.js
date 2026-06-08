@@ -25,7 +25,7 @@
  *   }
  */
 
-import { previewZoneAt, clearPreview, snapModalToZone } from './tileManager.js';
+import { previewZoneAt, clearPreview, snapModalToZone, releaseTile } from './tileManager.js';
 import { suspendDock, resumeDock, clearRightDock, applyEdgeDock } from './modalSnap.js';
 import { dismissOrRemove } from './escMenuStack.js';
 
@@ -1234,6 +1234,14 @@ export function minimize(id) {
         || modal.classList.contains('email-snap-left')) {
       try { suspendDock(modal); } catch (e) { console.warn('suspendDock on minimize failed', e); }
     }
+    // A tiled email (left-half) carries no dock class for suspendDock to catch,
+    // so without this its tile would keep occupying the left half after the
+    // modal is hidden and the chat would stay clamped into the right half. Tear
+    // the split down and release the tile so _reflowChat reclaims the space.
+    if ((id === 'email-lib-modal' || id.startsWith('email-reader-'))
+        && modal.querySelector('.modal-content')?.dataset._tileZone) {
+      _clearEmailSplitAfterMinimize(modal);
+    }
     modal.classList.add('hidden');
     modal.classList.add('modal-minimized');
     const content = modal.querySelector('.modal-content');
@@ -1470,7 +1478,7 @@ const _SWIPE_DOWN_MINIMIZES = new Set([
 // (per-email reader tabs) survive swipe-down too.
 const _SWIPE_DOWN_MINIMIZES_PREFIX = ['email-reader-'];
 
-function _clearEmailSplitAfterMinimize() {
+function _clearEmailSplitAfterMinimize(modal) {
   document.body.classList.remove('email-doc-split-active', 'email-front');
   document.documentElement.style.removeProperty('--email-doc-split-left-x');
   document.documentElement.style.removeProperty('--email-doc-split-email-w');
@@ -1481,7 +1489,13 @@ function _clearEmailSplitAfterMinimize() {
       'position', 'left', 'right', 'top', 'bottom', 'width', 'max-width',
       'height', 'z-index', 'transform',
     ].forEach(prop => docPane.style.removeProperty(prop));
+    // Drop the right-half tile flag so _reflowChat stops counting it.
+    delete docPane.dataset._tileZone;
   }
+  // Release the email's left-half tile too — otherwise the now-hidden email
+  // content keeps occupying the left half and the chat stays clamped.
+  const content = modal?.querySelector?.('.modal-content');
+  if (content?.dataset._tileZone) releaseTile(content);
   const divider = document.getElementById('doc-divider');
   if (divider) divider.style.display = '';
   requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
@@ -1521,7 +1535,7 @@ window.addEventListener('modal-dismissed', (e) => {
         || modal.classList.contains('email-snap-left')) {
       try { suspendDock(modal); } catch (err) { console.warn('suspendDock on dismissed failed', err); }
     }
-    if (isEmailModal) _clearEmailSplitAfterMinimize();
+    if (isEmailModal) _clearEmailSplitAfterMinimize(modal);
     modal.classList.add('modal-minimized');
   }
   _ensureDock();

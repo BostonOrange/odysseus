@@ -9,7 +9,7 @@ import { folderDisplayName, sortedFolders } from './emailInbox.js';
 import settingsModule from './settings.js';
 import * as Modals from './modalManager.js';
 import { makeWindowDraggable } from './windowDrag.js';
-import { snapModalToZone } from './tileManager.js';
+import { snapModalToZone, releaseTile } from './tileManager.js';
 import {
   _esc, _escLinkify, _extractName, _parseTurnMeta,
   _formatBubbleDate, _formatRecipients, _senderColor, _initials,
@@ -342,6 +342,15 @@ function _emailSplitLeftEdge() {
 // margin tileManager._viewportSafeRect reserves. (No magic numbers.)
 const VIEWPORT_SAFE_MARGIN_PX = 4;
 
+// Floating-window geometry used when a tiled email is dragged back out of its
+// half. Keep a usable minimum size and fall back to sensible defaults if the
+// live rect is somehow empty. (No magic numbers.)
+const EMAIL_FLOAT_MIN_W_PX = 420;
+const EMAIL_FLOAT_FALLBACK_W_PX = 560;
+const EMAIL_FLOAT_MIN_H_PX = 320;
+const EMAIL_FLOAT_FALLBACK_H_PX = 620;
+const EMAIL_FLOAT_MAX_H = '85vh';
+
 // Half-canvas snap zones, computed the same sidebar/icon-rail-aware way as
 // tileManager._viewportSafeRect so an externally-driven snap lands exactly on
 // the tile grid. That helper is module-private, so replicating its math here
@@ -434,6 +443,11 @@ function _measureEmailDocumentSplit(modal) {
       docPane.style.setProperty('max-width', 'none', 'important');
       docPane.style.setProperty('height', '100vh', 'important');
       docPane.style.setProperty('z-index', '260', 'important');
+      // Mark the doc pane as the RIGHT-half tile of the split so tileManager's
+      // _reflowChat counts both halves as occupied and HIDES the chat
+      // (display:none) instead of reflowing it into the right half where the
+      // doc pane merely covers it. The pane keeps its own geometry above.
+      if (docPane.dataset._tileZone !== 'right-half') docPane.dataset._tileZone = 'right-half';
     }
   } catch (_) {}
 }
@@ -458,6 +472,9 @@ function _clearEmailDocumentSplit() {
     'position', 'left', 'right', 'top', 'bottom', 'width', 'max-width',
     'height', 'z-index', 'transform',
   ].forEach(prop => docPane.style.removeProperty(prop));
+  // Drop the right-half tile flag so _reflowChat stops counting the right half
+  // as occupied and lets the chat reclaim the space.
+  delete docPane.dataset._tileZone;
 }
 
 function _hasDesktopRoomForEmailAndDocument(modal) {
@@ -1404,14 +1421,36 @@ function _makeDraggable(content, modal, fsClass) {
     fsClass,
     skipSelector: '.close-btn, .modal-close',
     enableLeftDock: true,  // park the email on the left while replying on the right
-    onDragStart: () => {
+    onDragStart: ({ rect }) => {
       // Dragging the email out of its tile dissolves the side-by-side split.
-      // tileManager un-snaps the window (restoring its pre-snap floating size)
-      // on the first move, so here we only tear down the doc-pane seam. The
-      // legacy email-snap-left class is removed defensively for older sessions.
-      modal.classList.remove('email-snap-left');
-      if (document.body.classList.contains('email-doc-split-active')) {
-        _clearEmailDocumentSplit();
+      // onDragStart fires on the header mousedown BEFORE any movement, and
+      // tileManager only un-snaps on a >=6px pointermove — so we must NOT
+      // assume that move happens (a plain click never moves). Do the unsnap
+      // HERE and re-pin a floating window at the same spot/size, keeping the
+      // geometry self-consistent so a click can't strand the email in a
+      // half-tile with the seam already gone (which also blocked recovery,
+      // since the doc-view re-tile guard skips when _tileZone is still set).
+      modal.classList.remove('email-snap-left');  // legacy overlay state
+      const wasTiled = !!content.dataset._tileZone;
+      if (wasTiled || document.body.classList.contains('email-doc-split-active')) {
+        _clearEmailDocumentSplit();  // seam vars/class + doc-pane right-half tile
+      }
+      if (wasTiled) {
+        releaseTile(content);  // drop dataset._tileZone + the !important snap geometry
+        // Re-pin as a normal floating window at the same on-screen spot/size so
+        // the drag continues without a visual jump.
+        content.style.position = 'fixed';
+        content.style.left = `${Math.round(rect.left)}px`;
+        content.style.top = `${Math.round(rect.top)}px`;
+        content.style.right = '';
+        content.style.bottom = '';
+        content.style.width = `${Math.max(EMAIL_FLOAT_MIN_W_PX, Math.round(rect.width || EMAIL_FLOAT_FALLBACK_W_PX))}px`;
+        content.style.maxWidth = '';
+        content.style.height = `${Math.max(EMAIL_FLOAT_MIN_H_PX, Math.round(rect.height || EMAIL_FLOAT_FALLBACK_H_PX))}px`;
+        content.style.maxHeight = EMAIL_FLOAT_MAX_H;
+        content.style.borderRadius = '';
+        content.style.transform = 'none';
+        content.style.margin = '0';
       }
     },
     onEnterFullscreen: fsClass ? enterFullscreen : null,
