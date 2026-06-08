@@ -118,8 +118,8 @@ function _viewportSafeRect() {
 function _zoneForPointer(x, y) {
   const safe = _viewportSafeRect();
 
-  // Dragged OVER the top edge (cursor at/past the very top) → TRUE fullscreen
-  // that covers everything, including the sidebar.
+  // Dragged OVER the top edge (cursor at/past the very top) → fullscreen: fills
+  // the viewport edge-to-edge but still reserves the sidebar (never covers it).
   if (y <= 0) return { name: 'fullscreen', rect: _rectForZone('fullscreen', safe) };
   // Near the top edge (but not over it) → "maximize": fill the safe area,
   // which sits NEXT TO the sidebar/rail rather than covering it.
@@ -148,18 +148,10 @@ function _zoneForPointer(x, y) {
 }
 
 function _zoneForContent(content, x, y) {
-  const modal = content && content.closest && content.closest('.modal, .research-overlay');
-  const zone = _zoneForPointer(x, y);
-  if (!zone) return null;
-  // Settings has a dense two-column layout; the full-height sidebar-style dock
-  // crushes it. Let it tile only into the normal right half, where the nav can
-  // flip to top tabs via CSS when the window gets narrow.
-  if (modal && modal.id === 'settings-modal' && zone.name !== 'right-half') return null;
-  if (modal && (modal.id === 'cookbook-modal'
-      || modal.id === 'theme-modal'
-      || modal.id === 'memory-modal')
-      && zone.name !== 'fullscreen') return null;
-  return zone;
+  // Any modal/window may tile to any zone. The previous per-modal restrictions
+  // (settings → right-half only; cookbook/theme/memory → fullscreen only) were
+  // removed at the user's request; dense layouts adapt via their own CSS.
+  return _zoneForPointer(x, y);
 }
 
 function _clearEdgeDockResidue(modal, content) {
@@ -438,10 +430,11 @@ function _reflowChat(animate = false) {
 // source of truth shared by _reclampAll (re-clamp on resize) and the public
 // zoneByName() helper (external callers re-applying a remembered tile).
 function _rectForZone(name, safe = _viewportSafeRect()) {
-  // fullscreen covers the ENTIRE viewport (including the sidebar) — not a
-  // canvas-cell rect, so it stays special.
+  // fullscreen fills the viewport edge-to-edge but RESERVES the sidebar/icon-rail
+  // (it must never cover the left column), so it stays special — not a cell rect.
   if (name === 'fullscreen') {
-    return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+    const left = Math.max(0, safe.left - 4);  // safe.left = sidebar/rail edge + 4
+    return { left, top: 0, width: window.innerWidth - left, height: window.innerHeight };
   }
   const cells = cellsForZone(name);
   if (!cells.length) return null;
