@@ -6,11 +6,6 @@
  * "1,1"=bottom-right.
  */
 
-// The canvas is split into a fixed 2x2 grid of cells. Naming the dimensions
-// keeps the halving math below from being a bare literal.
-const GRID_COLS = 2;
-const GRID_ROWS = 2;
-
 // Which cells a snap zone occupies. maximize/fullscreen cover all four
 // (for chat-occlusion the fullscreen tool hides the chat entirely).
 const ZONE_CELLS = {
@@ -44,31 +39,36 @@ const CANDIDATES = [
   ['1,1'],                      // BR quarter
 ];
 
-// Convert a set of cells (assumed to form a rectangle) to a pixel rect.
-function _cellsToRect(cells, canvas) {
-  const halfW = canvas.width / GRID_COLS;
-  const halfH = canvas.height / GRID_ROWS;
+// Convert a set of cells (assumed to form a rectangle) to a pixel rect, using
+// the grid split fractions. splitX/splitY default to 0.5 (an even 2x2 grid),
+// so callers that omit them get the original halving behavior.
+export function rectForCells(cells, canvas, splitX = 0.5, splitY = 0.5) {
+  const colEdge = [canvas.left, canvas.left + canvas.width * splitX, canvas.left + canvas.width];
+  const rowEdge = [canvas.top, canvas.top + canvas.height * splitY, canvas.top + canvas.height];
   const cols = cells.map((k) => Number(k.split(',')[0]));
   const rows = cells.map((k) => Number(k.split(',')[1]));
   const minC = Math.min(...cols), maxC = Math.max(...cols);
   const minR = Math.min(...rows), maxR = Math.max(...rows);
   return {
-    left: canvas.left + minC * halfW,
-    top: canvas.top + minR * halfH,
-    width: (maxC - minC + 1) * halfW,
-    height: (maxR - minR + 1) * halfH,
+    left: colEdge[minC],
+    top: rowEdge[minR],
+    width: colEdge[maxC + 1] - colEdge[minC],
+    height: rowEdge[maxR + 1] - rowEdge[minR],
   };
 }
 
-// Largest free rectangle for the chat. `occupiedCells` is an array of cell
-// keys claimed by tiled tools. Returns a pixel rect, or null if no cell is
-// free (a maximized/fullscreen tool covers the whole canvas).
-export function largestFreeRect(occupiedCells, canvas) {
+// The cells the chat fills: the largest free rectangle's cell set (candidates
+// scanned largest-area-first). Returns null when no cell is free.
+export function freeCellsForChat(occupiedCells) {
   const occ = new Set(occupiedCells || []);
   for (const cand of CANDIDATES) {
-    if (cand.every((c) => !occ.has(c))) {
-      return _cellsToRect(cand, canvas);
-    }
+    if (cand.every((c) => !occ.has(c))) return cand.slice();
   }
   return null;
+}
+
+// Largest free rectangle for the chat, in pixels, honoring the split fractions.
+export function largestFreeRect(occupiedCells, canvas, splitX = 0.5, splitY = 0.5) {
+  const cells = freeCellsForChat(occupiedCells);
+  return cells ? rectForCells(cells, canvas, splitX, splitY) : null;
 }
