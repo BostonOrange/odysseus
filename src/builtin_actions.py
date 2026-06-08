@@ -12,6 +12,7 @@ from typing import Tuple
 
 from src.auth_helpers import owner_filter
 from core.platform_compat import IS_WINDOWS, find_bash
+from src.email_labeling.thinking_classifier import classify_email_json, normalize_verdict
 
 logger = logging.getLogger(__name__)
 
@@ -1652,51 +1653,19 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
                     f"Snippet:\n{item.get('body','')}\n"
                 )
                 try:
-                    raw = await llm_call_async_with_fallback(
-                        candidates,
-                        [{"role": "user", "content": prompt}],
-                        temperature=0.1, max_tokens=220, timeout=30,
-                    )
-                    # Tolerant JSON-parse: strip code fences if present.
-                    txt = (raw or "").strip()
-                    if txt.startswith("```"):
-                        txt = txt.strip("`")
-                        # Drop a leading "json\n" or any tag.
-                        nl = txt.find("\n")
-                        if nl >= 0:
-                            txt = txt[nl + 1:]
-                    # Find first { ... } in the response.
-                    s = txt.find("{")
-                    e = txt.rfind("}")
-                    if s < 0 or e <= s:
+                    obj = await classify_email_json(candidates, prompt, max_tokens=1024, timeout=30)
+                    if obj is None:
                         failed_classifications.append({
                             "subject": item.get("subject") or "(no subject)",
                             "from": item.get("from") or "",
                             "reason": "model returned no JSON",
                         })
                         continue
-                    obj = _json.loads(txt[s:e + 1])
-                    score = int(obj.get("score", 0))
-                    reason = str(obj.get("reason", ""))[:200]
-                    raw_tags = obj.get("tags") or []
-                    if isinstance(raw_tags, str):
-                        raw_tags = [raw_tags]
-                    tags = []
-                    for t in raw_tags:
-                        if not isinstance(t, str):
-                            continue
-                        tag = t.strip().lower().replace("_", "-")
-                        if tag == "promo":
-                            tag = "marketing"
-                        if tag in CATEGORY_TAGS and tag not in tags:
-                            tags.append(tag)
-                    _spam_raw = obj.get("spam")
-                    if isinstance(_spam_raw, bool):
-                        spam = _spam_raw
-                    elif isinstance(_spam_raw, (int, float)):
-                        spam = bool(_spam_raw)
-                    else:
-                        spam = str(_spam_raw or "").strip().lower() in {"1", "true", "yes", "y"}
+                    _verdict = normalize_verdict(obj, CATEGORY_TAGS)
+                    score = _verdict["score"]
+                    reason = _verdict["reason"]
+                    tags = _verdict["tags"]
+                    spam = _verdict["spam"]
                     _blob = f"{item.get('headers','')}\n{item.get('subject','')}\n{item.get('body','')}".lower()
                     if _re.search(r"\b(i'?m|i am|im|we'?re|we are)\s+outside\b", _blob) or _re.search(
                         r"\b(waiting outside|at the door|locked out|can'?t get in|cannot get in)\b", _blob
