@@ -411,7 +411,9 @@ function _reclampAll(animate = false) {
   // returns a true viewport-covering rect that would snap fullscreen Notes over
   // that navigation chrome. Both panes still count toward chat occupancy in
   // _reflowChat — only their geometry is theirs.
-  document.querySelectorAll('[data-_tile-zone]:not(#doc-editor-pane)').forEach(c => {
+  // #chat-container is also excluded — _reflowChat owns the chat's geometry
+  // (pinned-clamp or auto-fill), and it is called at the end of this function.
+  document.querySelectorAll('[data-_tile-zone]:not(#doc-editor-pane):not(#chat-container)').forEach(c => {
     const name = c.dataset._tileZone;
     if (!name) return;
     // Preserve notes' custom chrome-aware fullscreen rect; re-clamp every other
@@ -514,9 +516,15 @@ function _ownerGrid() {
     const id = c.id || ('tile' + i);
     cellsForZone(c.dataset._tileZone).forEach((k) => { grid[k] = id; });
   });
-  const occupied = Object.keys(grid).filter((k) => grid[k] !== null);
-  const chatCells = freeCellsForChat(occupied);
-  if (chatCells) chatCells.forEach((k) => { grid[k] = 'chat'; });
+  // Assign the chat's auto-fill cells ONLY when the chat is unpinned. A pinned
+  // chat already appears above as a [data-_tile-zone] owner (#chat-container),
+  // so remaining cells are genuinely empty canvas — not chat.
+  const chatEl = document.getElementById('chat-container');
+  if (chatEl && !chatEl.dataset._tileZone) {
+    const occupied = Object.keys(grid).filter((k) => grid[k] !== null);
+    const chatCells = freeCellsForChat(occupied);
+    if (chatCells) chatCells.forEach((k) => { grid[k] = 'chat'; });
+  }
   return grid;
 }
 function _axisDivided() {
