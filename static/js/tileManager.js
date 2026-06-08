@@ -324,9 +324,28 @@ document.addEventListener('pointerup', () => {
   _activeZone = null;
 });
 
+// Apply a pixel rect to the chat tile (shared by the fill path and the pinned
+// path). Sets the springy transition when animating, then the !important
+// geometry — same property set the snap uses, so the chat behaves like a tile.
+function _sizeChat(chat, rect, animate) {
+  if (animate) {
+    chat.style.transition = `left ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), top ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), width ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), height ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1)`;
+    setTimeout(() => { chat.style.transition = ''; }, SNAP_ANIM_CLEAR_MS);
+  }
+  chat.style.removeProperty('display');
+  chat.style.setProperty('position', 'fixed', 'important');
+  chat.style.setProperty('left', rect.left + 'px', 'important');
+  chat.style.setProperty('top', rect.top + 'px', 'important');
+  chat.style.setProperty('width', rect.width + 'px', 'important');
+  chat.style.setProperty('height', rect.height + 'px', 'important');
+  chat.style.setProperty('max-height', rect.height + 'px', 'important');
+}
+
 // Reflow the chat into the largest free rectangle left by tiled tool windows.
 // Chat is the implicit "fill" tile: it always occupies whatever cells the
 // tiled tools don't. Hidden (display:none) only when a tool covers everything.
+// A PINNED chat (dataset._tileZone set by dragging it into a zone) is instead
+// clamped to that zone — it becomes a fixed tile and tools tile around it.
 function _reflowChat(animate = false) {
   const chat = document.getElementById('chat-container');
   if (!chat) return;
@@ -334,6 +353,14 @@ function _reflowChat(animate = false) {
     // Mobile: chat is full-screen; drop any tile inline styles we set.
     ['position', 'left', 'top', 'width', 'height', 'max-height'].forEach(p => chat.style.removeProperty(p));
     chat.style.removeProperty('display');
+    _positionSeams();
+    return;
+  }
+  // Pinned: the user dragged the chat into a zone, so it is a fixed tile now and
+  // tools tile around it. Clamp it to its zone instead of auto-filling.
+  if (chat.dataset._tileZone) {
+    const r = _rectForZone(chat.dataset._tileZone);
+    if (r) _sizeChat(chat, r, animate);
     _positionSeams();
     return;
   }
@@ -351,17 +378,7 @@ function _reflowChat(animate = false) {
   const canvas = { left: safe.left, top: safe.top, width: safe.right - safe.left, height: safe.bottom - safe.top };
   const rect = largestFreeRect(occupied, canvas, _splitX, _splitY);
   if (!rect) { chat.style.display = 'none'; _positionSeams(); return; }
-  chat.style.removeProperty('display');
-  if (animate) {
-    chat.style.transition = `left ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), top ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), width ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), height ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1)`;
-    setTimeout(() => { chat.style.transition = ''; }, SNAP_ANIM_CLEAR_MS);
-  }
-  chat.style.setProperty('position', 'fixed', 'important');
-  chat.style.setProperty('left', rect.left + 'px', 'important');
-  chat.style.setProperty('top', rect.top + 'px', 'important');
-  chat.style.setProperty('width', rect.width + 'px', 'important');
-  chat.style.setProperty('height', rect.height + 'px', 'important');
-  chat.style.setProperty('max-height', rect.height + 'px', 'important');
+  _sizeChat(chat, rect, animate);
   _positionSeams();
 }
 
