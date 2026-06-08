@@ -39,6 +39,7 @@
 // this helper no longer wires edge docks. The only edge gesture it still owns
 // is the top-edge fullscreen snap (onEnterFullscreen/onExitFullscreen).
 
+import { previewZoneAt, clearPreview, snapModalToZone } from './tileManager.js';
 import { makeWindowResizable } from './windowResize.js';
 
 const SNAP_PX = 6;        // cursor distance from top edge for fullscreen snap
@@ -180,6 +181,17 @@ export function makeWindowDraggable(modal, options = {}) {
     dragging = false;
     if (modal) modal.classList.remove('modal-dragging');
     _showSnapHint(false);
+    // tileManager's global pointerup fires BEFORE this mouseup handler, so if a
+    // tile zone was committed the snapped rect is already written to `content`
+    // and dataset._tileZone is set. Bail out before the fullscreen-enter /
+    // onDragEnd paths: onDragEnd would persist the snapped half-canvas coords
+    // (corrupting the saved window position), and a horizontal snap out of a
+    // fullscreen window must also drop fsClass or the next drag wrongly takes
+    // the fullscreen code path.
+    if (content && content.dataset._tileZone) {
+      if (fsClass && modal) modal.classList.remove(fsClass);
+      return;
+    }
     // Top edge → fullscreen. Left/right/corner edge snapping is committed by
     // tileManager's global pointerup listener, not here.
     if (enableFullscreen && typeof cy === 'number' && cy <= SNAP_PX) {
