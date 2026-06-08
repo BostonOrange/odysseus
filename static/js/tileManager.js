@@ -404,19 +404,35 @@ if (document.readyState === 'loading') {
   _watchSidebar();
 }
 
-// Reflow chat when a tiled tool is closed/hidden (not just un-snapped).
+// Reflow chat when a tiled tool is closed/hidden (not just un-snapped). A tool
+// stops occupying its zone in exactly two ways: its `data-_tile-zone` attribute
+// is removed (the tools' close/reset handlers delete `dataset._tileZone`) or the
+// element is removed from the DOM. Watch ONLY those two signals. Observing
+// `style` on the whole subtree would catch our own `_reflowChat` style writes —
+// including the `setTimeout` that clears `chat.style.transition` — and
+// self-trigger an endless reflow loop; observing `class` would fire on every
+// unrelated hover/animation class toggle in the app.
 function _watchTiledClose() {
   const root = document.body;
   if (!root) { requestAnimationFrame(_watchTiledClose); return; }
   const mo = new MutationObserver((muts) => {
     let touched = false;
     for (const m of muts) {
-      if (m.removedNodes && m.removedNodes.length) touched = true;
-      if (m.type === 'attributes') touched = true;
+      // Only `data-_tile-zone` attribute mutations reach us (attributeFilter),
+      // so any attribute change means a tool gained/lost its tiled state.
+      if (m.type === 'attributes') { touched = true; break; }
+      for (const node of m.removedNodes) {
+        if (node.nodeType !== 1) continue;
+        if (node.matches('[data-_tile-zone]') || node.querySelector('[data-_tile-zone]')) {
+          touched = true;
+          break;
+        }
+      }
+      if (touched) break;
     }
     if (touched) _reflowChatThrottled(true);
   });
-  mo.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+  mo.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-_tile-zone'] });
 }
 let _reflowPending = false;
 function _reflowChatThrottled(animate) {
