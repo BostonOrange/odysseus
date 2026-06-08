@@ -111,11 +111,24 @@ function _zoneForPointer(x, y) {
     return { name: 'maximize', rect: { left: safe.left, top: safe.top, width: W, height: H } };
   }
 
-  // Corner quarter-snaps DISABLED (user request) — only the top strip
-  // (maximize) and the right/bottom half-snaps remain. The LEFT-half snap
-  // is also disabled (the sidebar lives there; docking over it is awkward).
+  // Corner quarters take precedence over edges: a corner point is also near
+  // two edges, so check the corner box (CORNER_THRESHOLD_PX) of a vertical AND
+  // a horizontal edge first, then fall back to single-edge halves.
+  const nearL = x <= safe.left + CORNER_THRESHOLD_PX;
+  const nearR = x >= safe.right - CORNER_THRESHOLD_PX;
+  const nearT = y <= safe.top + CORNER_THRESHOLD_PX;
+  const nearB = y >= safe.bottom - CORNER_THRESHOLD_PX;
+
+  if (nearT && nearL) return { name: 'top-left',     rect: { left: safe.left,         top: safe.top,         width: W / 2, height: H / 2 } };
+  if (nearT && nearR) return { name: 'top-right',    rect: { left: safe.left + W / 2, top: safe.top,         width: W / 2, height: H / 2 } };
+  if (nearB && nearL) return { name: 'bottom-left',  rect: { left: safe.left,         top: safe.top + H / 2, width: W / 2, height: H / 2 } };
+  if (nearB && nearR) return { name: 'bottom-right', rect: { left: safe.left + W / 2, top: safe.top + H / 2, width: W / 2, height: H / 2 } };
+
+  // Single-edge halves (EDGE_THRESHOLD_PX is the thin band right at the edge).
+  if (x <= safe.left + EDGE_THRESHOLD_PX)
+    return { name: 'left-half',   rect: { left: safe.left,         top: safe.top, width: W / 2, height: H } };
   if (x >= safe.right - EDGE_THRESHOLD_PX)
-    return { name: 'right-half', rect: { left: safe.left + W / 2, top: safe.top, width: W / 2, height: H } };
+    return { name: 'right-half',  rect: { left: safe.left + W / 2, top: safe.top, width: W / 2, height: H } };
   if (y >= safe.bottom - EDGE_THRESHOLD_PX)
     return { name: 'bottom-half', rect: { left: safe.left, top: safe.top + H / 2, width: W, height: H / 2 } };
 
