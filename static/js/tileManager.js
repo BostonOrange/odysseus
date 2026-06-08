@@ -23,13 +23,26 @@
  * the original size.
  */
 
-import { cellsForZone, largestFreeRect } from './tileLayout.js';
+import { cellsForZone, largestFreeRect, rectForCells } from './tileLayout.js';
 
 const EDGE_THRESHOLD_PX = 24;     // how close to an edge counts as "near"
 const CORNER_THRESHOLD_PX = 64;   // corner box size
 const TOP_FULL_STRIP_PX = 8;      // top strip → maximize
 const SNAP_ANIM_S = 0.22;         // spring transition duration (seconds)
 const SNAP_ANIM_CLEAR_MS = 250;   // timeout to clear transition after snap (ms)
+const DEFAULT_SPLIT = 0.5;        // even 2x2 grid
+const MIN_TILE_PX = 240;          // a tile/chat may not be dragged narrower/shorter than this
+const SPLIT_X_KEY = 'odysseus-tile-split-x';
+const SPLIT_Y_KEY = 'odysseus-tile-split-y';
+
+function _loadSplit(key) {
+  try {
+    const n = parseFloat(localStorage.getItem(key) || '');
+    return Number.isFinite(n) && n > 0 && n < 1 ? n : DEFAULT_SPLIT;
+  } catch (_) { return DEFAULT_SPLIT; }
+}
+let _splitX = _loadSplit(SPLIT_X_KEY);
+let _splitY = _loadSplit(SPLIT_Y_KEY);
 
 let _ghost = null;
 let _activeZone = null;
@@ -101,40 +114,32 @@ function _viewportSafeRect() {
 
 function _zoneForPointer(x, y) {
   const safe = _viewportSafeRect();
-  const W = safe.right - safe.left;
-  const H = safe.bottom - safe.top;
 
   // Dragged OVER the top edge (cursor at/past the very top) → TRUE fullscreen
   // that covers everything, including the sidebar.
-  if (y <= 0) {
-    return { name: 'fullscreen', rect: { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight } };
-  }
+  if (y <= 0) return { name: 'fullscreen', rect: _rectForZone('fullscreen', safe) };
   // Near the top edge (but not over it) → "maximize": fill the safe area,
   // which sits NEXT TO the sidebar/rail rather than covering it.
-  if (y <= safe.top + TOP_FULL_STRIP_PX) {
-    return { name: 'maximize', rect: { left: safe.left, top: safe.top, width: W, height: H } };
-  }
+  if (y <= safe.top + TOP_FULL_STRIP_PX) return { name: 'maximize', rect: _rectForZone('maximize', safe) };
 
   // Corner quarters take precedence over edges: a corner point is also near
   // two edges, so check the corner box (CORNER_THRESHOLD_PX) of a vertical AND
-  // a horizontal edge first, then fall back to single-edge halves.
+  // a horizontal edge first, then fall back to single-edge halves. Rects come
+  // from _rectForZone so they honor the current grid split fractions.
   const nearL = x <= safe.left + CORNER_THRESHOLD_PX;
   const nearR = x >= safe.right - CORNER_THRESHOLD_PX;
   const nearT = y <= safe.top + CORNER_THRESHOLD_PX;
   const nearB = y >= safe.bottom - CORNER_THRESHOLD_PX;
 
-  if (nearT && nearL) return { name: 'top-left',     rect: { left: safe.left,         top: safe.top,         width: W / 2, height: H / 2 } };
-  if (nearT && nearR) return { name: 'top-right',    rect: { left: safe.left + W / 2, top: safe.top,         width: W / 2, height: H / 2 } };
-  if (nearB && nearL) return { name: 'bottom-left',  rect: { left: safe.left,         top: safe.top + H / 2, width: W / 2, height: H / 2 } };
-  if (nearB && nearR) return { name: 'bottom-right', rect: { left: safe.left + W / 2, top: safe.top + H / 2, width: W / 2, height: H / 2 } };
+  if (nearT && nearL) return { name: 'top-left',     rect: _rectForZone('top-left', safe) };
+  if (nearT && nearR) return { name: 'top-right',    rect: _rectForZone('top-right', safe) };
+  if (nearB && nearL) return { name: 'bottom-left',  rect: _rectForZone('bottom-left', safe) };
+  if (nearB && nearR) return { name: 'bottom-right', rect: _rectForZone('bottom-right', safe) };
 
   // Single-edge halves (EDGE_THRESHOLD_PX is the thin band right at the edge).
-  if (x <= safe.left + EDGE_THRESHOLD_PX)
-    return { name: 'left-half',   rect: { left: safe.left,         top: safe.top, width: W / 2, height: H } };
-  if (x >= safe.right - EDGE_THRESHOLD_PX)
-    return { name: 'right-half',  rect: { left: safe.left + W / 2, top: safe.top, width: W / 2, height: H } };
-  if (y >= safe.bottom - EDGE_THRESHOLD_PX)
-    return { name: 'bottom-half', rect: { left: safe.left, top: safe.top + H / 2, width: W, height: H / 2 } };
+  if (x <= safe.left + EDGE_THRESHOLD_PX)  return { name: 'left-half',   rect: _rectForZone('left-half', safe) };
+  if (x >= safe.right - EDGE_THRESHOLD_PX) return { name: 'right-half',  rect: _rectForZone('right-half', safe) };
+  if (y >= safe.bottom - EDGE_THRESHOLD_PX) return { name: 'bottom-half', rect: _rectForZone('bottom-half', safe) };
 
   return null;
 }
@@ -335,7 +340,7 @@ function _reflowChat(animate = false) {
     .forEach(c => { occupied.push(...cellsForZone(c.dataset._tileZone)); });
   const safe = _viewportSafeRect();
   const canvas = { left: safe.left, top: safe.top, width: safe.right - safe.left, height: safe.bottom - safe.top };
-  const rect = largestFreeRect(occupied, canvas);
+  const rect = largestFreeRect(occupied, canvas, _splitX, _splitY);
   if (!rect) { chat.style.display = 'none'; return; }
   chat.style.removeProperty('display');
   if (animate) {
@@ -354,19 +359,15 @@ function _reflowChat(animate = false) {
 // source of truth shared by _reclampAll (re-clamp on resize) and the public
 // zoneByName() helper (external callers re-applying a remembered tile).
 function _rectForZone(name, safe = _viewportSafeRect()) {
-  const W = safe.right - safe.left, H = safe.bottom - safe.top;
-  switch (name) {
-    case 'fullscreen':   return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
-    case 'maximize':     return { left: safe.left, top: safe.top, width: W, height: H };
-    case 'left-half':    return { left: safe.left, top: safe.top, width: W/2, height: H };
-    case 'right-half':   return { left: safe.left + W/2, top: safe.top, width: W/2, height: H };
-    case 'bottom-half':  return { left: safe.left, top: safe.top + H/2, width: W, height: H/2 };
-    case 'top-left':     return { left: safe.left, top: safe.top, width: W/2, height: H/2 };
-    case 'top-right':    return { left: safe.left + W/2, top: safe.top, width: W/2, height: H/2 };
-    case 'bottom-left':  return { left: safe.left, top: safe.top + H/2, width: W/2, height: H/2 };
-    case 'bottom-right': return { left: safe.left + W/2, top: safe.top + H/2, width: W/2, height: H/2 };
-    default: return null;
+  // fullscreen covers the ENTIRE viewport (including the sidebar) — not a
+  // canvas-cell rect, so it stays special.
+  if (name === 'fullscreen') {
+    return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
   }
+  const cells = cellsForZone(name);
+  if (!cells.length) return null;
+  const canvas = { left: safe.left, top: safe.top, width: safe.right - safe.left, height: safe.bottom - safe.top };
+  return rectForCells(cells, canvas, _splitX, _splitY);
 }
 
 // Re-clamp every currently-snapped window so it keeps filling its zone after
