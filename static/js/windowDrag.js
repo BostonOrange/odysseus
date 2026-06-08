@@ -39,11 +39,18 @@
 // this helper no longer wires edge docks. The only edge gesture it still owns
 // is the top-edge fullscreen snap (onEnterFullscreen/onExitFullscreen).
 
-import { previewZoneAt, clearPreview, snapModalToZone } from './tileManager.js';
+// NOTE: tileManager.js is loaded for its global pointer listeners via app.js;
+// windowDrag does not call into it directly (zone detection + snapping happen
+// in those global listeners), so it intentionally imports nothing from it.
 import { makeWindowResizable } from './windowResize.js';
 
 const SNAP_PX = 6;        // cursor distance from top edge for fullscreen snap
 const UNSNAP_PX = 24;     // cursor distance from top before fullscreen exits
+// tileManager's top strip ('maximize' for a near-top release, 'fullscreen' for
+// a release at/over the very top edge) overlaps windowDrag's own top-edge
+// fullscreen band (SNAP_PX). When a fullscreen-capable window is released in
+// that overlap, the windowDrag fullscreen gesture wins (see _onEnd).
+const TILE_TOP_STRIP_ZONES = ['maximize', 'fullscreen'];
 
 export function makeWindowDraggable(modal, options = {}) {
   const content = options.content;
@@ -68,12 +75,27 @@ export function makeWindowDraggable(modal, options = {}) {
   // window is fullscreen-snapped or docked. Wired here so all ~12 callsites
   // get it without per-file changes.
   if (options.enableResize !== false) {
+    // Lock resize whenever the window's layout is owned by something else:
+    //  - fullscreen (caller's fsClass)
+    //  - a tileManager snap (dataset._tileZone) — its !important inline styles
+    //    would silently override windowResize's writes, yet windowResize.end()
+    //    would still persist the tiled rect to localStorage and corrupt the
+    //    saved windowed size on the next open.
+    //  - an active edge-dock (modal-{left,right}-docked). modalSnap.applyEdgeDock
+    //    still sets these classes from modalManager/emailInbox/notes until the
+    //    remaining callers are rewired (plan Tasks 6-7); resizing a live dock
+    //    corrupts its anchored geometry.
+    const _dockClasses = ['modal-right-docked', 'modal-left-docked'];
     makeWindowResizable(content, {
       modal,
       mobileSkip,
       minWidth: options.minWidth,
       minHeight: options.minHeight,
-      isLocked: () => !!(fsClass && modal && modal.classList.contains(fsClass)),
+      isLocked: () => !!(
+        (fsClass && modal && modal.classList.contains(fsClass))
+        || (content && content.dataset && content.dataset._tileZone)
+        || (modal && _dockClasses.some((c) => modal.classList.contains(c)))
+      ),
       storageKey: options.resizeStorageKey
         || (modal && modal.id ? 'winsize-' + modal.id
           : (content.id ? 'winsize-' + content.id : null)),
@@ -126,6 +148,21 @@ export function makeWindowDraggable(modal, options = {}) {
   };
 
   const _isFullscreen = () => fsClass && modal && modal.classList.contains(fsClass);
+
+  // Strip a tile snap that tileManager committed on its global pointerup so the
+  // caller's fullscreen styles (set by onEnterFullscreen) can actually take
+  // effect — tileManager writes !important layout props that otherwise win.
+  // Unlike tileManager._unsnap we deliberately do NOT restore the pre-snap
+  // windowed geometry, because the very next step is fullscreen. Removing the
+  // data-_tile-zone attribute also lets tileManager's close-observer reflow the
+  // chat back to the full canvas.
+  const _clearTileSnap = () => {
+    if (!content) return;
+    ['position', 'left', 'top', 'width', 'height', 'max-height', 'margin', 'transform']
+      .forEach((p) => content.style.removeProperty(p));
+    delete content.dataset._tileZone;
+    delete content.dataset._tilePreSnap;
+  };
 
   const _startDrag = (cx, cy) => {
     dragging = true;
@@ -189,6 +226,19 @@ export function makeWindowDraggable(modal, options = {}) {
     // fullscreen window must also drop fsClass or the next drag wrongly takes
     // the fullscreen code path.
     if (content && content.dataset._tileZone) {
+      // tileManager's top strip overlaps windowDrag's top-edge fullscreen band
+      // (cy <= SNAP_PX): a release there commits 'maximize' (or 'fullscreen' at
+      // the very top) BEFORE this mouseup runs. For a fullscreen-capable window
+      // the fullscreen gesture wins — undo tileManager's snap so the caller's
+      // fullscreen styles apply, then enter fullscreen. Without this, fsClass is
+      // never added and downstream fullscreen-gated behavior (e.g. the email +
+      // document split) silently breaks.
+      if (enableFullscreen && typeof cy === 'number' && cy <= SNAP_PX
+          && TILE_TOP_STRIP_ZONES.includes(content.dataset._tileZone)) {
+        _clearTileSnap();
+        _enterFs();
+        return;
+      }
       if (fsClass && modal) modal.classList.remove(fsClass);
       return;
     }
