@@ -81,11 +81,8 @@ export function makeWindowDraggable(modal, options = {}) {
     //    would silently override windowResize's writes, yet windowResize.end()
     //    would still persist the tiled rect to localStorage and corrupt the
     //    saved windowed size on the next open.
-    //  - an active edge-dock (modal-{left,right}-docked). modalSnap.applyEdgeDock
-    //    still sets these classes from modalManager/emailInbox/notes until the
-    //    remaining callers are rewired (plan Tasks 6-7); resizing a live dock
-    //    corrupts its anchored geometry.
-    const _dockClasses = ['modal-right-docked', 'modal-left-docked'];
+    // (The old edge-dock lock for modal-{left,right}-docked is gone — modalSnap.js
+    // was deleted and nothing sets those classes anymore.)
     makeWindowResizable(content, {
       modal,
       mobileSkip,
@@ -94,7 +91,6 @@ export function makeWindowDraggable(modal, options = {}) {
       isLocked: () => !!(
         (fsClass && modal && modal.classList.contains(fsClass))
         || (content && content.dataset && content.dataset._tileZone)
-        || (modal && _dockClasses.some((c) => modal.classList.contains(c)))
       ),
       storageKey: options.resizeStorageKey
         || (modal && modal.id ? 'winsize-' + modal.id
