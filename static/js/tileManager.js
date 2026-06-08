@@ -28,6 +28,8 @@ import { cellsForZone, largestFreeRect } from './tileLayout.js';
 const EDGE_THRESHOLD_PX = 24;     // how close to an edge counts as "near"
 const CORNER_THRESHOLD_PX = 64;   // corner box size
 const TOP_FULL_STRIP_PX = 8;      // top strip → maximize
+const SNAP_ANIM_S = 0.22;         // spring transition duration (seconds)
+const SNAP_ANIM_CLEAR_MS = 250;   // timeout to clear transition after snap (ms)
 
 let _ghost = null;
 let _activeZone = null;
@@ -213,7 +215,7 @@ function _applySnap(content, rect, zoneName) {
       transform: content.style.transform,
     });
   }
-  content.style.transition = 'left 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), top 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), width 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), height 0.22s cubic-bezier(0.34, 1.56, 0.64, 1)';
+  content.style.transition = `left ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), top ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), width ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), height ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1)`;
   // Use !important — some modals (e.g. cookbook) carry inline width/height
   // and CSS that otherwise re-center the .modal-content, which made the snap
   // "jump back to the middle" on release.
@@ -226,7 +228,7 @@ function _applySnap(content, rect, zoneName) {
   content.style.setProperty('margin', '0', 'important');
   content.style.setProperty('transform', 'none', 'important');
   content.dataset._tileZone = zoneName;
-  setTimeout(() => { content.style.transition = ''; }, 250);
+  setTimeout(() => { content.style.transition = ''; }, SNAP_ANIM_CLEAR_MS);
   _reflowChat(true);
 }
 
@@ -330,8 +332,8 @@ function _reflowChat(animate = false) {
   if (!rect) { chat.style.display = 'none'; return; }
   chat.style.removeProperty('display');
   if (animate) {
-    chat.style.transition = 'left 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), top 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), width 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), height 0.22s cubic-bezier(0.34, 1.56, 0.64, 1)';
-    setTimeout(() => { chat.style.transition = ''; }, 250);
+    chat.style.transition = `left ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), top ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), width ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), height ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1)`;
+    setTimeout(() => { chat.style.transition = ''; }, SNAP_ANIM_CLEAR_MS);
   }
   chat.style.setProperty('position', 'fixed', 'important');
   chat.style.setProperty('left', rect.left + 'px', 'important');
@@ -363,8 +365,8 @@ function _reclampAll(animate = false) {
       default: return;
     }
     if (animate) {
-      c.style.transition = 'left 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), top 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), width 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), height 0.22s cubic-bezier(0.34, 1.56, 0.64, 1)';
-      setTimeout(() => { c.style.transition = ''; }, 250);
+      c.style.transition = `left ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), top ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), width ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1), height ${SNAP_ANIM_S}s cubic-bezier(0.34, 1.56, 0.64, 1)`;
+      setTimeout(() => { c.style.transition = ''; }, SNAP_ANIM_CLEAR_MS);
     }
     c.style.setProperty('left', r.left + 'px', 'important');
     c.style.setProperty('top',  r.top  + 'px', 'important');

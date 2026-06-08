@@ -793,7 +793,7 @@ function _wireChipDrag(chip, dock) {
       const z = previewZoneAt(e.clientX, e.clientY, modal);
       // Ignore the bottom zone — the dock lives at the bottom, so horizontal
       // chip reordering must not get hijacked into a bottom-half snap.
-      chipSnapZone = (z && z.name !== 'bottom-half') ? z : null;
+      chipSnapZone = (z && z.name !== 'bottom-half' && z.name !== 'bottom-left' && z.name !== 'bottom-right') ? z : null;
       if (z && !chipSnapZone) clearPreview();
       if (chipSnapZone) {
         chip.style.opacity = '0.35';
