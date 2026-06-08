@@ -23,6 +23,8 @@
  * the original size.
  */
 
+import { cellsForZone, largestFreeRect } from './tileLayout.js';
+
 const EDGE_THRESHOLD_PX = 24;     // how close to an edge counts as "near"
 const CORNER_THRESHOLD_PX = 64;   // corner box size
 const TOP_FULL_STRIP_PX = 8;      // top strip → maximize
@@ -225,6 +227,7 @@ function _applySnap(content, rect, zoneName) {
   content.style.setProperty('transform', 'none', 'important');
   content.dataset._tileZone = zoneName;
   setTimeout(() => { content.style.transition = ''; }, 250);
+  _reflowChat(true);
 }
 
 function _unsnap(content) {
@@ -242,6 +245,7 @@ function _unsnap(content) {
   if (!content.style.position) content.style.position = 'fixed';
   delete content.dataset._tilePreSnap;
   delete content.dataset._tileZone;
+  _reflowChat(true);
 }
 
 function _findDragTarget(e) {
@@ -305,6 +309,38 @@ document.addEventListener('pointerup', () => {
   _activeZone = null;
 });
 
+// Reflow the chat into the largest free rectangle left by tiled tool windows.
+// Chat is the implicit "fill" tile: it always occupies whatever cells the
+// tiled tools don't. Hidden (display:none) only when a tool covers everything.
+function _reflowChat(animate = false) {
+  const chat = document.getElementById('chat-container');
+  if (!chat) return;
+  if (!_isDesktop()) {
+    // Mobile: chat is full-screen; drop any tile inline styles we set.
+    ['position', 'left', 'top', 'width', 'height', 'max-height'].forEach(p => chat.style.removeProperty(p));
+    chat.style.removeProperty('display');
+    return;
+  }
+  const occupied = [];
+  document.querySelectorAll('.modal-content[data-_tile-zone], .research-pane[data-_tile-zone]')
+    .forEach(c => { occupied.push(...cellsForZone(c.dataset._tileZone)); });
+  const safe = _viewportSafeRect();
+  const canvas = { left: safe.left, top: safe.top, width: safe.right - safe.left, height: safe.bottom - safe.top };
+  const rect = largestFreeRect(occupied, canvas);
+  if (!rect) { chat.style.display = 'none'; return; }
+  chat.style.removeProperty('display');
+  if (animate) {
+    chat.style.transition = 'left 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), top 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), width 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), height 0.22s cubic-bezier(0.34, 1.56, 0.64, 1)';
+    setTimeout(() => { chat.style.transition = ''; }, 250);
+  }
+  chat.style.setProperty('position', 'fixed', 'important');
+  chat.style.setProperty('left', rect.left + 'px', 'important');
+  chat.style.setProperty('top', rect.top + 'px', 'important');
+  chat.style.setProperty('width', rect.width + 'px', 'important');
+  chat.style.setProperty('height', rect.height + 'px', 'important');
+  chat.style.setProperty('max-height', rect.height + 'px', 'important');
+}
+
 // Re-clamp every currently-snapped window so it keeps filling its zone after
 // the safe-rect changes (viewport resize, sidebar toggle, etc.).
 function _reclampAll(animate = false) {
@@ -336,6 +372,7 @@ function _reclampAll(animate = false) {
     c.style.setProperty('height', r.height + 'px', 'important');
     c.style.setProperty('max-height', r.height + 'px', 'important');
   });
+  _reflowChat(animate);
 }
 
 let _reclampPending = false;
@@ -366,6 +403,30 @@ if (document.readyState === 'loading') {
 } else {
   _watchSidebar();
 }
+
+// Reflow chat when a tiled tool is closed/hidden (not just un-snapped).
+function _watchTiledClose() {
+  const root = document.body;
+  if (!root) { requestAnimationFrame(_watchTiledClose); return; }
+  const mo = new MutationObserver((muts) => {
+    let touched = false;
+    for (const m of muts) {
+      if (m.removedNodes && m.removedNodes.length) touched = true;
+      if (m.type === 'attributes') touched = true;
+    }
+    if (touched) _reflowChatThrottled(true);
+  });
+  mo.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+}
+let _reflowPending = false;
+function _reflowChatThrottled(animate) {
+  if (_reflowPending) return;
+  _reflowPending = true;
+  requestAnimationFrame(() => { try { _reflowChat(animate); } finally { _reflowPending = false; } });
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _watchTiledClose);
+} else { _watchTiledClose(); }
 
 // ── Public API for other drag sources (e.g. dragging a minimized dock chip
 // to a screen edge) to reuse the same snap zones + ghost preview + apply. ──
