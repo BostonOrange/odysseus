@@ -32,6 +32,8 @@ const SNAP_ANIM_S = 0.22;         // spring transition duration (seconds)
 const SNAP_ANIM_CLEAR_MS = 250;   // timeout to clear transition after snap (ms)
 const DEFAULT_SPLIT = 0.5;        // even 2x2 grid
 const MIN_TILE_PX = 240;          // a tile/chat may not be dragged narrower/shorter than this
+const CHAT_DRAG_W_FRAC = 0.5;     // floating chat width while dragging (fraction of canvas)
+const CHAT_DRAG_H_FRAC = 0.6;     // floating chat height while dragging (fraction of canvas)
 const SPLIT_X_KEY = 'odysseus-tile-split-x';
 const SPLIT_Y_KEY = 'odysseus-tile-split-y';
 
@@ -47,6 +49,7 @@ let _splitY = _loadSplit(SPLIT_Y_KEY);
 let _ghost = null;
 let _activeZone = null;
 let _tracking = null; // { content, startRect }
+let _chatDragging = false; // true while the chat is being live-dragged as a floating window
 
 function _isDesktop() { return window.innerWidth > 768; }
 
@@ -274,19 +277,49 @@ function _findDragTarget(e) {
   return content || null;
 }
 
+// Detach the chat from its tile geometry into a free-floating window under the
+// cursor so it can be dragged like a tool window. Called on the first
+// significant move of a chat drag. Sets _chatDragging so _reflowChat won't fight
+// the live position (deleting data-_tile-zone below fires the close-observer).
+function _detachChatForDrag(t, cx, cy) {
+  const chat = t.content;
+  _chatDragging = true;
+  chat.classList.add('chat-dragging');
+  ['position', 'left', 'top', 'width', 'height', 'max-height', 'margin', 'transform', 'transition']
+    .forEach((p) => chat.style.removeProperty(p));
+  delete chat.dataset._tileZone;
+  delete chat.dataset._tilePreSnap;
+  chat.style.removeProperty('display');
+  const safe = _viewportSafeRect();
+  const w = Math.round((safe.right - safe.left) * CHAT_DRAG_W_FRAC);
+  const h = Math.round((safe.bottom - safe.top) * CHAT_DRAG_H_FRAC);
+  const left = Math.round(cx - w / 2);
+  const top = Math.max(safe.top, cy - 18); // sit the grabbed top bar under the cursor
+  chat.style.setProperty('position', 'fixed', 'important');
+  chat.style.setProperty('width', w + 'px', 'important');
+  chat.style.setProperty('height', h + 'px', 'important');
+  chat.style.setProperty('max-height', h + 'px', 'important');
+  chat.style.setProperty('margin', '0', 'important');
+  chat.style.setProperty('transform', 'none', 'important');
+  chat.style.setProperty('left', left + 'px', 'important');
+  chat.style.setProperty('top', top + 'px', 'important');
+  t.startX = cx; t.startY = cy;
+  t.floatLeft = left; t.floatTop = top;
+  t.detached = true;
+}
+
 document.addEventListener('pointerdown', (e) => {
   if (!_isDesktop()) return;
   const content = _findDragTarget(e);
   if (!content) return;
-
-  // If we're already snapped, dragging away should unsnap immediately so the
-  // user can move freely.
-  if (content.dataset._tileZone) {
-    // Defer slightly so pointermove threshold is met before unsnap kicks in
-    _tracking = { content, startX: e.clientX, startY: e.clientY, willUnsnap: true };
-  } else {
-    _tracking = { content, startX: e.clientX, startY: e.clientY, willUnsnap: false };
-  }
+  const isChat = content.id === 'chat-container';
+  // A snapped tool un-snaps on first move; the chat instead detaches into a
+  // floating window (handled in pointermove). willUnsnap stays false for the
+  // chat so _unsnap (which restores tool pre-snap geometry) is not used on it.
+  _tracking = {
+    content, startX: e.clientX, startY: e.clientY, isChat, detached: false,
+    willUnsnap: !isChat && !!content.dataset._tileZone,
+  };
 });
 
 document.addEventListener('pointermove', (e) => {
@@ -294,15 +327,20 @@ document.addEventListener('pointermove', (e) => {
   if (!_isDesktop()) return;
   const dx = e.clientX - _tracking.startX;
   const dy = e.clientY - _tracking.startY;
-  if (Math.hypot(dx, dy) < 6) return;
+  if (!_tracking.detached && Math.hypot(dx, dy) < 6) return;
 
-  // Unsnap on first significant move
-  if (_tracking.willUnsnap) {
+  if (_tracking.isChat) {
+    // Chat: detach into a floating window on first move, then follow the cursor.
+    if (!_tracking.detached) _detachChatForDrag(_tracking, e.clientX, e.clientY);
+    _tracking.content.style.setProperty('left', (_tracking.floatLeft + (e.clientX - _tracking.startX)) + 'px', 'important');
+    _tracking.content.style.setProperty('top',  (_tracking.floatTop  + (e.clientY - _tracking.startY)) + 'px', 'important');
+  } else if (_tracking.willUnsnap) {
+    // Unsnap a tool on first significant move
     _unsnap(_tracking.content);
     _tracking.willUnsnap = false;
   }
 
-  // Detect snap zone under cursor
+  // Detect snap zone under cursor (ghost preview)
   const zone = _zoneForContent(_tracking.content, e.clientX, e.clientY);
   if (zone) {
     _showGhost(zone.rect);
@@ -318,8 +356,20 @@ document.addEventListener('pointerup', () => {
   const t = _tracking;
   _tracking = null;
   _hideGhost();
+  if (t.isChat) {
+    _chatDragging = false;
+    t.content.classList.remove('chat-dragging');
+  }
   if (_activeZone && _isDesktop()) {
     _applySnap(t.content, _activeZone.rect, _activeZone.name);
+  } else if (t.isChat && t.detached) {
+    // Dropped loose (not over a zone) → the chat is not a free-floating window;
+    // revert it to the auto-fill tile.
+    ['position', 'left', 'top', 'width', 'height', 'max-height', 'margin', 'transform', 'transition']
+      .forEach((p) => t.content.style.removeProperty(p));
+    delete t.content.dataset._tileZone;
+    delete t.content.dataset._tilePreSnap;
+    _reflowChat(true);
   }
   _activeZone = null;
 });
@@ -347,6 +397,8 @@ function _sizeChat(chat, rect, animate) {
 // A PINNED chat (dataset._tileZone set by dragging it into a zone) is instead
 // clamped to that zone — it becomes a fixed tile and tools tile around it.
 function _reflowChat(animate = false) {
+  // A live chat drag is positioning the chat as a floating window — don't fight it.
+  if (_chatDragging) return;
   const chat = document.getElementById('chat-container');
   if (!chat) return;
   if (!_isDesktop()) {

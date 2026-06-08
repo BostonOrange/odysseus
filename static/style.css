@@ -863,6 +863,14 @@ body.bg-pattern-sparkles {
         pointer-events: none;
         align-self: center;
       }
+      /* While being dragged, the chat reads as a floating window. */
+      .chat-container.chat-dragging {
+        z-index: 600;
+        border-radius: 10px;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+        overflow: hidden;
+        opacity: 0.97;
+      }
     }
     /* Bottom dock — chip per minimized modal */
     #minimized-dock {
