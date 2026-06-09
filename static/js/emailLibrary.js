@@ -2149,7 +2149,12 @@ function _createCard(em) {
 
   // Topic-tag pills (marketing/shopping/newsletter/…) from the classifier —
   // mirror the sidebar (emailInbox.js) so the library cards show their labels too.
-  const _emTags = Array.isArray(em.tags) ? em.tags : [];
+  // Prefer the real Gmail labels (X-GM-LABELS) when present — so your own
+  // manually-set labels show too — and fall back to the internal classifier
+  // tags for emails not yet labeled in Gmail.
+  const _emTags = (Array.isArray(em.gmail_labels) && em.gmail_labels.length)
+    ? em.gmail_labels
+    : (Array.isArray(em.tags) ? em.tags : []);
   if (_emTags.length) {
     const tagsRow = document.createElement('div');
     tagsRow.style.cssText = 'margin-top:4px;';

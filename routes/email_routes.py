@@ -793,8 +793,12 @@ def setup_email_routes():
             emails = []
             if uid_list:
                 fetch_set = b",".join(uid_list)
+                # Gmail exposes the real labels via X-GM-LABELS; only request it
+                # on Gmail (X-GM-EXT-1) so non-Gmail servers don't reject the fetch.
+                _is_gmail = "X-GM-EXT-1" in getattr(conn, "capabilities", ())
+                _fetch_items = "(UID FLAGS RFC822.HEADER RFC822.SIZE" + (" X-GM-LABELS" if _is_gmail else "") + ")"
                 try:
-                    status, msg_data = _imap_uid_fetch(conn, fetch_set, "(UID FLAGS RFC822.HEADER RFC822.SIZE)")
+                    status, msg_data = _imap_uid_fetch(conn, fetch_set, _fetch_items)
                 except Exception as e:
                     logger.warning(f"Batch fetch failed, falling back to per-UID: {e}")
                     status, msg_data = "NO", []
@@ -862,6 +866,16 @@ def setup_email_routes():
                         flags = flag_m.group(1) if flag_m else ""
                         size_m = re.search(r'RFC822\.SIZE (\d+)', meta)
                         size = int(size_m.group(1)) if size_m else 0
+                        # Real Gmail labels (X-GM-LABELS): keep user labels, drop
+                        # \\-prefixed system ones (\\Important, \\Sent, …) and
+                        # non-ASCII (modified-UTF-7) names.
+                        gmail_labels = []
+                        _gm = re.search(r'X-GM-LABELS \(([^)]*)\)', meta)
+                        if _gm:
+                            for _q, _bare in re.findall(r'"([^"]*)"|(\S+)', _gm.group(1)):
+                                _lbl = _q or _bare
+                                if _lbl and not _lbl.startswith('\\') and '&' not in _lbl:
+                                    gmail_labels.append(_lbl)
                         if not raw_header:
                             continue
 
@@ -908,6 +922,7 @@ def setup_email_routes():
                             "flags": flags,
                             "has_attachments": has_attachments,
                             "tags": tag_entry.get("tags", []),
+                            "gmail_labels": gmail_labels,
                             "is_spam_verdict": tag_entry.get("spam", False),
                         })
                     except Exception as e:
