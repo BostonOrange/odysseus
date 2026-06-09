@@ -8,6 +8,8 @@ class FakeConn:
 
     def uid(self, *args):
         self.calls.append(args)
+        if args and args[0] == "SEARCH":
+            return ("OK", [b"99001"])  # resolve any Message-ID to a fake real UID
         return (self._typ, [b""])
 
     def select(self, *args):
@@ -74,23 +76,30 @@ def test_apply_for_account_non_gmail_never_connects():
 def test_apply_for_account_labels_only_fresh_tagged():
     conn = FakeConn()
     items = [
-        {"uid": "1", "key": "a"},                  # fresh + tags -> applied
+        {"uid": "1", "key": "a"},                  # fresh + tags + msgid -> applied
         {"uid": "2", "key": "b", "cached": True},  # cached -> skipped
         {"uid": "3", "key": "c"},                  # fresh, no tags -> skipped
+        {"uid": "4", "key": "d"},                  # fresh, tags but no msgid -> skipped
     ]
-    scores = {"a": {"tags": ["work", "marketing"]}, "b": {"tags": ["x"]}, "c": {"tags": []}}
+    scores = {
+        "a": {"tags": ["work", "marketing"], "message_id": "<a@x>"},
+        "b": {"tags": ["x"], "message_id": "<b@x>"},
+        "c": {"tags": [], "message_id": "<c@x>"},
+        "d": {"tags": ["finance"]},
+    }
     n = gl.apply_labels_for_account(lambda: conn, items, scores,
                                     enabled=True, imap_host="imap.gmail.com")
     assert n == 1
     assert ("SELECT", "INBOX") in conn.calls
+    assert ("SEARCH", None, "HEADER", "Message-ID", "<a@x>") in conn.calls
     stores = [c for c in conn.calls if c[0] == "STORE"]
-    assert stores == [("STORE", "1", "+X-GM-LABELS", '("work" "marketing")')]
+    assert stores == [("STORE", "99001", "+X-GM-LABELS", '("work" "marketing")')]
 
 
 def test_apply_for_account_never_raises_on_connect_error():
     def boom():
         raise RuntimeError("imap down")
     n = gl.apply_labels_for_account(boom, [{"uid": "1", "key": "a"}],
-                                    {"a": {"tags": ["work"]}}, enabled=True,
-                                    imap_host="imap.gmail.com")
+                                    {"a": {"tags": ["work"], "message_id": "<a@x>"}},
+                                    enabled=True, imap_host="imap.gmail.com")
     assert n == 0

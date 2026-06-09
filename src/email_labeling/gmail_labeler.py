@@ -60,12 +60,18 @@ def apply_labels_for_account(connect_fn, items, per_uid_scores, *, enabled, imap
     """
     if not enabled or not is_gmail_host(imap_host):
         return 0
-    to_label = [
-        (it["uid"], (per_uid_scores.get(it.get("key")) or {}).get("tags") or [])
-        for it in items
-        if not it.get("cached") and it.get("uid")
-    ]
-    to_label = [(uid, tags) for uid, tags in to_label if tags]
+    # The scanner's "uid" is a message SEQUENCE number (conn.search/fetch), which
+    # is meaningless in a freshly-reopened session. Key off the stable Message-ID
+    # (carried on the verdict) and resolve it to the real IMAP UID at apply time.
+    to_label = []
+    for it in items:
+        if it.get("cached"):
+            continue
+        verdict = per_uid_scores.get(it.get("key")) or {}
+        tags = verdict.get("tags") or []
+        message_id = (verdict.get("message_id") or "").strip()
+        if tags and message_id:
+            to_label.append((message_id, tags))
     if not to_label:
         return 0
     applied = 0
@@ -73,8 +79,9 @@ def apply_labels_for_account(connect_fn, items, per_uid_scores, *, enabled, imap
         conn = connect_fn()
         try:
             conn.select("INBOX")
-            for uid, tags in to_label:
-                if apply_gmail_labels(conn, uid, tags):
+            for message_id, tags in to_label:
+                real_uid = _uid_for_message_id(conn, message_id)
+                if real_uid and apply_gmail_labels(conn, real_uid, tags):
                     applied += 1
         finally:
             try:
@@ -84,3 +91,17 @@ def apply_labels_for_account(connect_fn, items, per_uid_scores, *, enabled, imap
     except Exception as e:
         logger.warning("apply_labels_for_account failed (%s): %s", imap_host, e)
     return applied
+
+
+def _uid_for_message_id(conn, message_id):
+    """Resolve a stable RFC822 Message-ID to the current IMAP UID, or None."""
+    try:
+        typ, data = conn.uid("SEARCH", None, "HEADER", "Message-ID", message_id)
+        if typ == "OK" and data and data[0]:
+            parts = data[0].split()
+            if parts:
+                first = parts[0]
+                return first.decode() if isinstance(first, bytes) else str(first)
+    except Exception as e:
+        logger.debug("uid_for_message_id failed for %s: %s", message_id, e)
+    return None
