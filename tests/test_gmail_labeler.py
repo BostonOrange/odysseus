@@ -103,3 +103,24 @@ def test_apply_for_account_never_raises_on_connect_error():
                                     {"a": {"tags": ["work"], "message_id": "<a@x>"}},
                                     enabled=True, imap_host="imap.gmail.com")
     assert n == 0
+
+
+def test_list_gmail_labels_filters_system_and_keeps_user():
+    class C:
+        def list(self):
+            return ("OK", [
+                b'(\\HasNoChildren) "/" "INBOX"',
+                b'(\\HasChildren \\Noselect) "/" "[Gmail]"',
+                b'(\\HasNoChildren \\All) "/" "[Gmail]/All Mail"',
+                b'(\\HasNoChildren) "/" "Work"',
+                b'(\\HasNoChildren) "/" "commercial"',
+                b'(\\HasNoChildren) "/" "Work/Projects"',
+            ])
+    assert gl.list_gmail_labels(C()) == ["Work", "commercial", "Work/Projects"]
+
+
+def test_list_gmail_labels_never_raises():
+    class C:
+        def list(self):
+            raise RuntimeError("boom")
+    assert gl.list_gmail_labels(C()) == []

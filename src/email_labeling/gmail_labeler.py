@@ -9,6 +9,7 @@ that writes to the real mailbox, so it is:
   - unit-tested against a fake connection (no real Gmail in tests).
 """
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -105,3 +106,33 @@ def _uid_for_message_id(conn, message_id):
     except Exception as e:
         logger.debug("uid_for_message_id failed for %s: %s", message_id, e)
     return None
+
+
+def list_gmail_labels(conn):
+    """Return the account's user-created Gmail label names.
+
+    Gmail exposes each label as an IMAP folder, so ``conn.list()`` enumerates
+    them. Drops system folders ([Gmail]/…, INBOX) and \\Noselect containers.
+    Never raises. Non-ASCII labels (modified UTF-7, contain '&') are skipped
+    rather than mis-decoded.
+    """
+    names = []
+    try:
+        typ, data = conn.list()
+        if typ != "OK":
+            return names
+        for line in data or []:
+            if not line:
+                continue
+            s = line.decode("utf-8", "replace") if isinstance(line, bytes) else str(line)
+            if "\\noselect" in s.lower():
+                continue
+            m = re.search(r'"([^"]*)"\s*$', s)
+            name = m.group(1) if m else (s.split()[-1].strip('"') if s.split() else "")
+            if not name or name.upper() == "INBOX" or name.startswith("[Gmail]") or "&" in name:
+                continue
+            if name not in names:
+                names.append(name)
+    except Exception as e:
+        logger.debug("list_gmail_labels failed: %s", e)
+    return names

@@ -1498,7 +1498,7 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
             from src.email_labeling.registry import LabelRegistry
             from src.email_labeling.apply import apply_dynamic_labels
             from src.email_labeling.embed import embed_names
-            from src.email_labeling.gmail_labeler import apply_labels_for_account
+            from src.email_labeling.gmail_labeler import apply_labels_for_account, is_gmail_host, list_gmail_labels
             _label_cfg = {
                 "auto_create": bool(get_user_setting("email_auto_create_labels", owner, False)),
                 "cap": int(get_setting("email_label_cap", 50)),
@@ -1648,6 +1648,24 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
             except Exception as e:
                 logger.warning(f"urgency: IMAP scan failed for account {acc.id}: {e}")
                 continue
+
+            # ── Seed the registry with the account's REAL Gmail labels (Gmail
+            # exposes them as IMAP folders via LIST) so the model reuses your
+            # existing labels first and only proposes new ones when none fit.
+            if _label_cfg is not None and is_gmail_host(getattr(acc, "imap_host", "")):
+                try:
+                    _gconn = _imap_connect(acc.id)
+                    try:
+                        for _gl in list_gmail_labels(_gconn):
+                            _label_registry.add(_gl, source="gmail")
+                    finally:
+                        try:
+                            _gconn.logout()
+                        except Exception:
+                            pass
+                    _label_names = _label_registry.list_names()
+                except Exception as _ge:
+                    logger.debug("gmail label seed failed for %s: %s", acc.id, _ge)
 
             for item in items:
                 scanned += 1
