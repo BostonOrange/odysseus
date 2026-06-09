@@ -10,10 +10,37 @@ CACHE_TTL = 24 * 3600  # 24 h — hardware probes are user-initiated via the Res
                        # half-hour during a long session.
 
 
-_remote_host = None  # set by detect_system(host=...)
-_remote_port = None  # set by detect_system(ssh_port=...)
+_remote_host = None  # set by detect_system(host=...) — validated via _safe_ssh_host
+_remote_port = None  # set by detect_system(ssh_port=...) — validated via _safe_ssh_port
 _remote_platform = None  # set by detect_system(platform=...): "windows", "linux", "termux"
 _last_gpu_error = None  # set by _detect_nvidia() when nvidia-smi errors (driver mismatch, etc.)
+
+
+_SSH_PORT_RE = re.compile(r"^\d{1,5}$")
+
+
+def _safe_ssh_host(host):
+    """Validate an SSH host before it becomes ssh argv.
+
+    A host that begins with "-" is parsed by ssh as an OPTION, so a value like
+    `-oProxyCommand=<cmd>` makes ssh execute `<cmd>` on the LOCAL machine —
+    option-injection → RCE. Reject leading-dash (and empty) hosts, mirroring
+    routes/shell_routes.py:_ssh_base_argv. Returns the cleaned host.
+    """
+    h = (host or "").strip()
+    if not h or h.startswith("-"):
+        raise ValueError(f"invalid ssh host: {host!r}")
+    return h
+
+
+def _safe_ssh_port(port):
+    """Validate an SSH port; normalise blank/"22" to None (no -p flag)."""
+    p = (port or "").strip()
+    if p in ("", "22"):
+        return None
+    if not _SSH_PORT_RE.match(p) or not (1 <= int(p) <= 65535):
+        raise ValueError(f"invalid ssh port: {port!r}")
+    return p
 
 
 def _run(cmd):
@@ -24,6 +51,10 @@ def _run(cmd):
                 cmd_str = " ".join(cmd)
             else:
                 cmd_str = cmd
+            # Defense in depth: detect_system already validates the host, but
+            # never let a "-"-leading host reach ssh as an option (RCE guard).
+            if _remote_host.startswith("-"):
+                return None
             ssh_cmd = ["ssh", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no"]
             if _remote_port and _remote_port != "22":
                 ssh_cmd += ["-p", _remote_port]
@@ -598,8 +629,14 @@ def detect_system(host="", ssh_port="", platform="", fresh=False):
         if (now - ts) < CACHE_TTL:
             return cached
 
-    _remote_host = host or None
-    _remote_port = ssh_port or None
+    # Validate the remote target BEFORE any SSH probe runs. An unvalidated host
+    # is shipped straight into ssh argv by _run(); a "-"-leading value is an
+    # option-injection RCE (see _safe_ssh_host). Reject early with an error.
+    try:
+        _remote_host = _safe_ssh_host(host) if host else None
+        _remote_port = _safe_ssh_port(ssh_port)
+    except ValueError as e:
+        return {"error": str(e), "host": host}
     _remote_platform = platform or None
 
     # Windows: single PowerShell command for all hardware info
