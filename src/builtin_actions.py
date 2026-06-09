@@ -1498,6 +1498,7 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
             from src.email_labeling.registry import LabelRegistry
             from src.email_labeling.apply import apply_dynamic_labels
             from src.email_labeling.embed import embed_names
+            from src.email_labeling.gmail_labeler import apply_labels_for_account
             _label_cfg = {
                 "auto_create": bool(get_user_setting("email_auto_create_labels", owner, False)),
                 "cap": int(get_setting("email_label_cap", 50)),
@@ -1765,6 +1766,17 @@ async def action_check_email_urgency(owner: str, **kwargs) -> Tuple[str, bool]:
                     })
                     logger.debug(f"urgency: LLM classify failed for {key}: {e}")
                     continue
+
+            # ── Apply topic labels to the real Gmail mailbox (Plan 3): opt-in
+            # (email_apply_gmail_labels, default off) + Gmail-only. Reopens a
+            # writable IMAP session and STOREs +X-GM-LABELS on freshly-classified
+            # messages; never raises into the scan.
+            if _label_cfg is not None:
+                apply_labels_for_account(
+                    lambda _id=acc.id: _imap_connect(_id), items, per_uid_scores,
+                    enabled=bool(get_user_setting("email_apply_gmail_labels", owner, False)),
+                    imap_host=getattr(acc, "imap_host", ""),
+                )
 
             # ── Prune cache entries for UIDs that are no longer unread (replied
             # / archived / deleted). Compare against `items` (everything UNSEEN
