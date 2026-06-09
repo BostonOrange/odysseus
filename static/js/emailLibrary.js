@@ -2147,6 +2147,16 @@ function _createCard(em) {
   meta.innerHTML = `<span class="email-meta-sender"><span style="opacity:0.55">${senderPrefix}</span><span style="color:${color};font-weight:600">${_esc(senderName)}</span></span><span class="email-meta-sep"> · </span><span class="email-meta-date">${_esc(dateStr)}</span>`;
   content.appendChild(meta);
 
+  // Topic-tag pills (marketing/shopping/newsletter/…) from the classifier —
+  // mirror the sidebar (emailInbox.js) so the library cards show their labels too.
+  const _emTags = Array.isArray(em.tags) ? em.tags : [];
+  if (_emTags.length) {
+    const tagsRow = document.createElement('div');
+    tagsRow.style.cssText = 'margin-top:4px;';
+    tagsRow.innerHTML = `<span class="email-tags" style="margin-left:0">${_emTags.map(t => `<span class="email-tag email-tag-${_esc(t)}">${_esc(t)}</span>`).join('')}</span>`;
+    content.appendChild(tagsRow);
+  }
+
   card.appendChild(content);
 
   // Per-card menu button (... menu)
