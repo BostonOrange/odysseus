@@ -173,11 +173,11 @@ time it's inverted to `disabled_tools` exactly as the scheduler does.
      local model — which is the intent.) Resolves auth `headers` from the matching
      `ModelEndpoint`, as `_run_agent_loop` does today.
   4. Inverts `enabled_tools` → `disabled_tools`; RAG-caps `relevant_tools` for the task text.
-  5. **Saves** `_active_document_id` / `_active_model` (the module globals in
-     `tool_implementations.py:71`), increments depth, runs `run_agent_text(...)` under
+  5. Increments depth, runs `run_agent_text(...)` under
      `asyncio.wait_for(timeout=AGENT_DISPATCH_TIMEOUT_S)` with **an ephemeral/None session_id**
-     so the sub-agent's internal transcript does not persist into the parent session, then
-     **restores** the globals and decrements depth in a `finally`.
+     so the sub-agent's internal transcript does not persist into the parent session,
+     decrementing depth in a `finally`. Active-document/active-model isolation comes from
+     the ContextVar migration (see Error handling), not ad-hoc save/restore.
   6. `strip_think`s the result, truncates to `DISPATCH_RESULT_MAX_CHARS`, returns
      `{"agent": name, "result": ...}`.
 
@@ -232,9 +232,13 @@ call it; the depth `ContextVar` increments per level and refuses past `MAX_AGENT
   normal chat.
 - **Depth exceeded** → dispatch refused with a message naming the cap (no silent drop).
 - **Timeout** → `asyncio.wait_for` cancels; return a "agent timed out after Ns" string.
-- **Global-state isolation** → save/restore `_active_document_id`/`_active_model` around each
-  dispatch (stack-safe because dispatch is awaited and sequential). *Robust follow-up (noted,
-  not Phase A): migrate these to `contextvars.ContextVar`.*
+- **Global-state isolation** → Phase A migrates `_active_document_id`/`_active_model`
+  (`src/tool_implementations.py:71`) from module globals to `contextvars.ContextVar`s
+  (token-based set/reset inside the existing setter functions — call-site signatures
+  unchanged, so blast radius is small). Elevated from follow-up to in-scope by the
+  codebase assessment: the globals are a re-entrancy hazard dispatch would otherwise
+  tiptoe around; ContextVars make nested (and future concurrent) dispatch safe by
+  construction.
 - **No final text from a weak model** → inherited grace-summarization guarantees a non-empty
   result.
 - **Endpoint down** → inherited utility fallback chain.
@@ -269,8 +273,9 @@ call it; the depth `ContextVar` increments per level and refuses past `MAX_AGENT
 - **Unit — `run_agent_text`**: against a stubbed `stream_agent_loop` yielding delta events →
   returns concatenated text; grace path when no delta; timeout path.
 - **Unit — depth cap**: nested `do_dispatch_agent` refuses at `MAX_AGENT_DEPTH`.
-- **Unit — global-state save/restore**: `_active_document_id` restored after a dispatch that
-  mutates it.
+- **Unit — context isolation**: a dispatch that mutates the active document does not leak
+  into the parent context (ContextVar set/reset verified); existing callers of the
+  setters/getters behave identically after the migration.
 - **Regression**: existing `task_scheduler` tests pass after extracting `run_agent_text`
   (`tests/test_task_scheduler_session_delivery.py`).
 - **Integration**: `dispatch_agent` end-to-end against a fake model returns a captured string.
@@ -300,7 +305,8 @@ on this.
 - **New:** `routes/agents_routes.py` (`POST /api/agents/import`, `GET /api/agents`) — or fold into an existing admin route.
 - **Modify:** `src/task_scheduler.py` — refactor `_run_agent_loop` to call `run_agent_text`.
 - **Modify:** `src/agent_tools.py` (`TOOL_TAGS` += `dispatch_agent`), `src/tool_schemas.py`
-  (schema), `src/tool_implementations.py` (`do_dispatch_agent` + save/restore globals),
+  (schema), `src/tool_implementations.py` (`do_dispatch_agent` + migrate
+  `_active_document_id`/`_active_model` to `contextvars.ContextVar`),
   `src/tool_execution.py` (register dispatch if not table-driven).
 - **Modify:** `routes/chat_routes.py` — `@agent-name` detection → streamed dispatch.
 - **Modify (optional):** `static/js/chat.js` — `@`-autocomplete of agent names.
