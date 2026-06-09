@@ -872,8 +872,8 @@ def setup_email_routes():
                         gmail_labels = []
                         _gm = re.search(r'X-GM-LABELS \(([^)]*)\)', meta)
                         if _gm:
-                            for _q, _bare in re.findall(r'"([^"]*)"|(\S+)', _gm.group(1)):
-                                _lbl = _q or _bare
+                            for _gmatch in re.finditer(r'"([^"]*)"|(\S+)', _gm.group(1)):
+                                _lbl = _gmatch.group(1) or _gmatch.group(2)
                                 if _lbl and not _lbl.startswith('\\') and '&' not in _lbl:
                                     gmail_labels.append(_lbl)
                         if not raw_header:
