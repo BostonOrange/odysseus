@@ -8,7 +8,16 @@ class FakeConn:
 
     def uid(self, *args):
         self.calls.append(args)
+        if args and args[0] == "SEARCH":
+            return ("OK", [b"99001"])  # resolve any Message-ID to a fake real UID
         return (self._typ, [b""])
+
+    def select(self, *args):
+        self.calls.append(("SELECT",) + args)
+        return ("OK", [b"1"])
+
+    def logout(self):
+        self.calls.append(("LOGOUT",))
 
 
 def test_apply_issues_store_with_quoted_labels():
@@ -46,3 +55,72 @@ def test_is_gmail_host():
     assert gl.is_gmail_host("IMAP.GMAIL.COM")
     assert not gl.is_gmail_host("imap.fastmail.com")
     assert not gl.is_gmail_host("")
+
+
+def test_apply_for_account_disabled_never_connects():
+    calls = []
+    n = gl.apply_labels_for_account(lambda: calls.append("c") or FakeConn(),
+                                    [{"uid": "1", "key": "a"}], {"a": {"tags": ["work"]}},
+                                    enabled=False, imap_host="imap.gmail.com")
+    assert n == 0 and calls == []
+
+
+def test_apply_for_account_non_gmail_never_connects():
+    calls = []
+    n = gl.apply_labels_for_account(lambda: calls.append("c") or FakeConn(),
+                                    [{"uid": "1", "key": "a"}], {"a": {"tags": ["work"]}},
+                                    enabled=True, imap_host="imap.fastmail.com")
+    assert n == 0 and calls == []
+
+
+def test_apply_for_account_labels_only_fresh_tagged():
+    conn = FakeConn()
+    items = [
+        {"uid": "1", "key": "a"},                  # fresh + tags + msgid -> applied
+        {"uid": "2", "key": "b", "cached": True},  # cached -> skipped
+        {"uid": "3", "key": "c"},                  # fresh, no tags -> skipped
+        {"uid": "4", "key": "d"},                  # fresh, tags but no msgid -> skipped
+    ]
+    scores = {
+        "a": {"tags": ["work", "marketing"], "message_id": "<a@x>"},
+        "b": {"tags": ["x"], "message_id": "<b@x>"},
+        "c": {"tags": [], "message_id": "<c@x>"},
+        "d": {"tags": ["finance"]},
+    }
+    n = gl.apply_labels_for_account(lambda: conn, items, scores,
+                                    enabled=True, imap_host="imap.gmail.com")
+    assert n == 1
+    assert ("SELECT", "INBOX") in conn.calls
+    assert ("SEARCH", None, "HEADER", "Message-ID", "<a@x>") in conn.calls
+    stores = [c for c in conn.calls if c[0] == "STORE"]
+    assert stores == [("STORE", "99001", "+X-GM-LABELS", '("work" "marketing")')]
+
+
+def test_apply_for_account_never_raises_on_connect_error():
+    def boom():
+        raise RuntimeError("imap down")
+    n = gl.apply_labels_for_account(boom, [{"uid": "1", "key": "a"}],
+                                    {"a": {"tags": ["work"], "message_id": "<a@x>"}},
+                                    enabled=True, imap_host="imap.gmail.com")
+    assert n == 0
+
+
+def test_list_gmail_labels_filters_system_and_keeps_user():
+    class C:
+        def list(self):
+            return ("OK", [
+                b'(\\HasNoChildren) "/" "INBOX"',
+                b'(\\HasChildren \\Noselect) "/" "[Gmail]"',
+                b'(\\HasNoChildren \\All) "/" "[Gmail]/All Mail"',
+                b'(\\HasNoChildren) "/" "Work"',
+                b'(\\HasNoChildren) "/" "commercial"',
+                b'(\\HasNoChildren) "/" "Work/Projects"',
+            ])
+    assert gl.list_gmail_labels(C()) == ["Work", "commercial", "Work/Projects"]
+
+
+def test_list_gmail_labels_never_raises():
+    class C:
+        def list(self):
+            raise RuntimeError("boom")
+    assert gl.list_gmail_labels(C()) == []

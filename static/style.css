@@ -28842,7 +28842,7 @@ body.doc-find-active mark.doc-find-mark.current {
 .email-filter-chip-clear:hover { opacity: 1; }
 .email-date { font-size: 10px; opacity: 0.5; white-space: nowrap; flex-shrink: 0; }
 .email-subject { font-size: 11px; opacity: 0.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
-.email-tags { display: inline-flex; gap: 3px; margin-left: 6px; vertical-align: middle; }
+.email-tags { display: inline-flex; gap: 3px; margin-left: 6px; vertical-align: middle; flex-wrap: wrap; }
 .email-tag {
   display: inline-block;
   font-size: 9px;

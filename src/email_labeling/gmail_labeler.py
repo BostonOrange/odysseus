@@ -9,6 +9,7 @@ that writes to the real mailbox, so it is:
   - unit-tested against a fake connection (no real Gmail in tests).
 """
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -45,3 +46,93 @@ def apply_gmail_labels(conn, uid, labels) -> bool:
     except Exception as e:
         logger.warning("apply_gmail_labels failed for uid %s: %s", uid, e)
         return False
+
+
+def apply_labels_for_account(connect_fn, items, per_uid_scores, *, enabled, imap_host) -> int:
+    """Apply each freshly-classified item's tags to Gmail for one account.
+
+    No-op (returns 0) unless ``enabled`` AND the account is a Gmail host. Opens
+    ONE writable IMAP session via ``connect_fn()``, STOREs +X-GM-LABELS per
+    message, then logs out. Never raises — a mailbox error must not break triage.
+
+    items:          per-account scan results (dicts with "uid", "key", optional "cached").
+    per_uid_scores: {key: verdict}; verdict["tags"] are the labels to apply.
+    Returns the count of messages a label STORE succeeded on.
+    """
+    if not enabled or not is_gmail_host(imap_host):
+        return 0
+    # The scanner's "uid" is a message SEQUENCE number (conn.search/fetch), which
+    # is meaningless in a freshly-reopened session. Key off the stable Message-ID
+    # (carried on the verdict) and resolve it to the real IMAP UID at apply time.
+    to_label = []
+    for it in items:
+        if it.get("cached"):
+            continue
+        verdict = per_uid_scores.get(it.get("key")) or {}
+        tags = verdict.get("tags") or []
+        message_id = (verdict.get("message_id") or "").strip()
+        if tags and message_id:
+            to_label.append((message_id, tags))
+    if not to_label:
+        return 0
+    applied = 0
+    try:
+        conn = connect_fn()
+        try:
+            conn.select("INBOX")
+            for message_id, tags in to_label:
+                real_uid = _uid_for_message_id(conn, message_id)
+                if real_uid and apply_gmail_labels(conn, real_uid, tags):
+                    applied += 1
+        finally:
+            try:
+                conn.logout()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning("apply_labels_for_account failed (%s): %s", imap_host, e)
+    return applied
+
+
+def _uid_for_message_id(conn, message_id):
+    """Resolve a stable RFC822 Message-ID to the current IMAP UID, or None."""
+    try:
+        typ, data = conn.uid("SEARCH", None, "HEADER", "Message-ID", message_id)
+        if typ == "OK" and data and data[0]:
+            parts = data[0].split()
+            if parts:
+                first = parts[0]
+                return first.decode() if isinstance(first, bytes) else str(first)
+    except Exception as e:
+        logger.debug("uid_for_message_id failed for %s: %s", message_id, e)
+    return None
+
+
+def list_gmail_labels(conn):
+    """Return the account's user-created Gmail label names.
+
+    Gmail exposes each label as an IMAP folder, so ``conn.list()`` enumerates
+    them. Drops system folders ([Gmail]/…, INBOX) and \\Noselect containers.
+    Never raises. Non-ASCII labels (modified UTF-7, contain '&') are skipped
+    rather than mis-decoded.
+    """
+    names = []
+    try:
+        typ, data = conn.list()
+        if typ != "OK":
+            return names
+        for line in data or []:
+            if not line:
+                continue
+            s = line.decode("utf-8", "replace") if isinstance(line, bytes) else str(line)
+            if "\\noselect" in s.lower():
+                continue
+            m = re.search(r'"([^"]*)"\s*$', s)
+            name = m.group(1) if m else (s.split()[-1].strip('"') if s.split() else "")
+            if not name or name.upper() == "INBOX" or name.startswith("[Gmail]") or "&" in name:
+                continue
+            if name not in names:
+                names.append(name)
+    except Exception as e:
+        logger.debug("list_gmail_labels failed: %s", e)
+    return names
