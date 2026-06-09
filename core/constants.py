@@ -1,8 +1,13 @@
-# src/constants.py
-"""Application-wide constants and configuration values."""
+# core/constants.py
+"""Application-wide constants and configuration values.
+
+NOTE: this is a near-duplicate of src/constants.py (full de-duplication is
+tracked with the layering-inversion cleanup). Keep APP_VERSION in sync with
+src/constants.py — /api/version serves this copy.
+"""
 import os
 
-APP_VERSION = "0.9.1"
+APP_VERSION = "1.0.0"
 
 # Base paths
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/"
