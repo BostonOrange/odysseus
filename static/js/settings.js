@@ -2871,6 +2871,31 @@ async function initEmailSettings() {
     if (el('set-email-style')) el('set-email-style').value = data.style || '';
   } catch (_) {}
 
+  // Auto-labeling toggles — global settings, mirroring the Reminders "AI
+  // Synthesis" toggle (load + POST /api/auth/settings).
+  try {
+    const res = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+    const s = await res.json();
+    if (el('set-email-apply-gmail-labels')) el('set-email-apply-gmail-labels').checked = !!s.email_apply_gmail_labels;
+    if (el('set-email-auto-create-labels')) el('set-email-auto-create-labels').checked = !!s.email_auto_create_labels;
+  } catch (_) {}
+  const _saveLabelSetting = async (patch) => {
+    try {
+      await fetch('/api/auth/settings', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+    } catch (e) { console.warn('Failed to save auto-labeling setting', e); }
+  };
+  el('set-email-apply-gmail-labels')?.addEventListener('change', (e) => {
+    _saveLabelSetting({ email_apply_gmail_labels: e.target.checked });
+  });
+  el('set-email-auto-create-labels')?.addEventListener('change', (e) => {
+    _saveLabelSetting({ email_auto_create_labels: e.target.checked });
+  });
+
   // Save email config
   el('set-email-save')?.addEventListener('click', async () => {
     const msg = el('set-email-msg');
