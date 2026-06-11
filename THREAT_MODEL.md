@@ -76,6 +76,13 @@ These are open, acknowledged, and contributor help is welcome:
 
 2. **SSRF via `/api/v1/chat` `base_url` parameter.** A chat-scoped API token can supply an arbitrary `base_url`; the server forwards the LLM request to that host without validating the scheme or address. PR #1039 fixes this.
 
-3. **`src/search/` partial consolidation.** `src.search.core` and `src.search.providers` correctly alias `services.search` via `sys.modules` replacement. `analytics`, `cache`, `content`, `query`, and `ranking` are still independent copies that can drift. The SSRF regression tests in `tests/test_webhook_ssrf_resilience.py` test `src.webhook_manager` directly (separate from search), so the safety net there is intact. See #1058.
+3. **Module duplication (largely resolved).** All `src/search/*` submodules
+   (`core`, `providers`, `analytics`, `cache`, `content`, `query`, `ranking`) now
+   alias `services.search` via `sys.modules` replacement / re-export shims — they
+   no longer drift. `src/constants.py`→`core.constants` and
+   `services/youtube/youtube_handler.py`→`src.youtube_handler` were the remaining
+   diverged copies and are now re-export shims too. The one still-open item is the
+   `src/research_handler.py` (live) vs `services/research/` (parallel, unwired)
+   pair — an abandoned-migration decision, not a silent-drift risk.
 
 4. **Token scopes are coarse.** There is no way to grant a session a subset of the owning user's privileges. Companion/mobile tokens carry either `chat` or `admin` scope with no per-capability granularity.
