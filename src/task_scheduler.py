@@ -1565,103 +1565,30 @@ class TaskScheduler:
                               disabled_tools: set | None = None,
                               relevant_tools: set | None = None,
                               override_user_message: str | None = None) -> str:
-        """Run the full agent loop with tool access, collecting the final text."""
-        from src.agent_loop import stream_agent_loop
+        """Run the full agent loop with tool access, collecting the final text.
+
+        Thin wrapper over ``agent_dispatch.run_agent_text`` — the shared
+        loop-driver used by scheduled tasks, the dispatch_agent tool, and the
+        @agent trigger. Behaviour is unchanged from when this body lived here.
+        """
+        from src.agent_dispatch import run_agent_text
 
         system_content = system_prompt or "You are a helpful assistant executing a scheduled task. Use available tools to complete the task thoroughly."
         user_content = override_user_message or task.prompt
-        messages = [
-            {"role": "system", "content": system_content},
-            {"role": "user", "content": user_content},
-        ]
-
-        # Resolve headers from the endpoint's API key
-        headers = {}
-        try:
-            from core.database import SessionLocal, ModelEndpoint
-            from src.endpoint_resolver import normalize_base, build_headers
-            db2 = SessionLocal()
-            try:
-                eps = db2.query(ModelEndpoint).filter(ModelEndpoint.is_enabled == True).all()
-                for ep in eps:
-                    if normalize_base(ep.base_url) in endpoint_url or endpoint_url in normalize_base(ep.base_url):
-                        headers = build_headers(ep.api_key, normalize_base(ep.base_url))
-                        break
-            finally:
-                db2.close()
-        except Exception:
-            pass
-        full_text = ""
-        tool_results = []
-
         # Honor per-task max_steps (defense against runaway agent loops).
         # Falls back to 20 if not set — the historical default.
         _task_max_rounds = task.max_steps if task.max_steps and task.max_steps > 0 else 20
-        # Tasks are background workloads — they share the Utility model's
-        # fallback chain (Settings → Utility Model → Fallbacks). A downed
-        # primary endpoint won't silently yield `(no output)` — same recipe
-        # chat uses but with the utility list (`utility_model_fallbacks`).
-        try:
-            from src.endpoint_resolver import resolve_utility_fallback_candidates
-            _task_fallbacks = resolve_utility_fallback_candidates()
-        except Exception:
-            _task_fallbacks = []
-        async for event_str in stream_agent_loop(
+        return await run_agent_text(
             endpoint_url=endpoint_url,
             model=model,
-            messages=messages,
-            max_rounds=_task_max_rounds,
-            session_id=session_id,
+            system_prompt=system_content,
+            user_message=user_content,
             owner=task.owner,
-            headers=headers,
+            session_id=session_id,
             disabled_tools=disabled_tools,
             relevant_tools=relevant_tools,
-            fallbacks=_task_fallbacks,
-        ):
-            if event_str.startswith("data: ") and not event_str.startswith("data: [DONE]"):
-                try:
-                    data = json.loads(event_str[6:])
-                    # Capture text from all event types, not just delta
-                    if "delta" in data:
-                        full_text += data["delta"]
-                    elif data.get("type") == "tool_output":
-                        # Tool results — capture summary so we have SOMETHING even
-                        # if the model never produces a final text response
-                        tool_summary = data.get("stdout") or data.get("output") or data.get("result") or ""
-                        if isinstance(tool_summary, str) and tool_summary.strip():
-                            tool_results.append(f"[{data.get('tool', '?')}] {tool_summary[:500]}")
-                except (json.JSONDecodeError, KeyError):
-                    pass
-
-        # Grace summarization — if the model exhausted rounds on tool calls
-        # without producing a final text response, do one last LLM call
-        # asking it to summarize what it did. Guarantees output.
-        if not full_text.strip():
-            try:
-                from src.llm_core import llm_call_async_with_fallback
-                from src.endpoint_resolver import resolve_utility_fallback_candidates
-                grace_context = "You ran out of steps. "
-                if tool_results:
-                    grace_context += "Here's what your tools returned:\n" + "\n".join(tool_results[-5:])
-                else:
-                    grace_context += "No tool results were captured."
-                grace_context += "\n\nSummarize what you accomplished and what's still pending. Be concise."
-                _grace_candidates = [(endpoint_url, model, headers)] + resolve_utility_fallback_candidates()
-                full_text = await llm_call_async_with_fallback(
-                    _grace_candidates,
-                    messages=[
-                        {"role": "system", "content": system_content},
-                        {"role": "user", "content": grace_context},
-                    ],
-                    timeout=30,
-                )
-                full_text = (full_text or "").strip()
-            except Exception as e:
-                logger.warning(f"Grace summarization failed: {e}")
-                if tool_results:
-                    full_text = "\n".join(tool_results[-5:])
-
-        return full_text or "(no output)"
+            max_rounds=_task_max_rounds,
+        )
 
     async def _execute_research_task(self, task, db) -> str:
         """Execute a deep research task using DeepResearcher."""
