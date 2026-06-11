@@ -7,10 +7,20 @@ capture-to-string implementation (with the grace-summarization + endpoint
 fallback that make it robust on a fragile local model). Later Phase A tasks add
 the dispatch tool, the trigger, and the agent importer on top of this.
 """
+import asyncio
+import contextvars
 import json
 import logging
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+# Per-async-context nesting counter so a coordinator agent can sub-dispatch but
+# cannot runaway-spawn. It flows through the await chain (same task), so a
+# nested do_dispatch_agent sees the incremented depth.
+_dispatch_depth: "contextvars.ContextVar[int]" = contextvars.ContextVar(
+    "agent_dispatch_depth", default=0
+)
 
 # --- dispatch tuning (named — no magic numbers) ---
 MAX_AGENT_DEPTH = 3                 # max nesting of sub-agent -> sub-agent dispatch
@@ -141,3 +151,113 @@ async def run_agent_text(
                 full_text = "\n".join(tool_results[-_GRACE_TOOL_RESULTS_KEPT:])
 
     return full_text or "(no output)"
+
+
+async def do_dispatch_agent(content: str, session_id: Optional[str] = None,
+                            owner: Optional[str] = None) -> Dict:
+    """Run a named agent (CrewMember) in isolation and return its result text.
+
+    `content`: line 1 = agent name, line 2+ = the task. Resolves the agent's
+    persona + tool subset, then runs it via `run_agent_text` on the session's
+    model — sequential, depth-capped, and timed out — returning the captured
+    result. The sub-agent runs with NO session so its transcript never persists
+    into the parent chat; only the returned summary surfaces (as the tool result).
+    """
+    lines = (content or "").split("\n", 1)
+    name = (lines[0] if lines else "").strip()
+    task = (lines[1] if len(lines) > 1 else "").strip()
+    if not name:
+        return {"error": "dispatch_agent: first line must be the agent name"}
+    if not task:
+        return {"error": "dispatch_agent: provide a task on line 2+"}
+
+    depth = _dispatch_depth.get()
+    if depth >= MAX_AGENT_DEPTH:
+        return {"error": f"dispatch_agent: max sub-agent depth ({MAX_AGENT_DEPTH}) reached"}
+
+    from core.database import SessionLocal, CrewMember, Session as DbSession
+
+    endpoint_url = model = system_prompt = None
+    disabled_tools = relevant_tools = None
+    db = SessionLocal()
+    try:
+        crew = (
+            db.query(CrewMember)
+            .filter(CrewMember.owner == owner, CrewMember.name.ilike(name))
+            .first()
+        )
+        if crew is None:
+            return {"error": f"dispatch_agent: no agent named {name!r} for this user"}
+        system_prompt = (crew.personality or "").strip() or f"You are {name}."
+        # Resolve model/endpoint: crew override -> parent session -> (error).
+        endpoint_url = crew.endpoint_url
+        model = crew.model
+        if (not endpoint_url or not model) and session_id:
+            sess = db.query(DbSession).filter(DbSession.id == session_id).first()
+            if sess:
+                endpoint_url = endpoint_url or sess.endpoint_url
+                model = model or sess.model
+        # Invert the agent's enabled_tools whitelist into a disabled_tools blacklist.
+        try:
+            enabled = json.loads(crew.enabled_tools or "[]")
+        except (TypeError, ValueError):
+            enabled = []
+        if isinstance(enabled, list) and enabled:
+            from src.tool_index import BUILTIN_TOOL_DESCRIPTIONS
+            disabled_tools = set(BUILTIN_TOOL_DESCRIPTIONS.keys()) - set(enabled)
+        # RAG-cap the tool set for this task so a local model isn't flooded.
+        try:
+            from src.tool_index import get_tool_index, ASSISTANT_ALWAYS_AVAILABLE
+            idx = get_tool_index()
+            if idx:
+                relevant_tools = idx.get_tools_for_query(task, k=AGENT_DISPATCH_RAG_K) | ASSISTANT_ALWAYS_AVAILABLE
+                if disabled_tools:
+                    relevant_tools = relevant_tools - disabled_tools
+        except Exception:
+            relevant_tools = None
+    finally:
+        db.close()
+
+    if not endpoint_url or not model:
+        return {"error": "dispatch_agent: no model/endpoint available for the sub-agent"}
+
+    # Isolate the parent's active document/model from the sub-agent's tools
+    # (stack-safe save/restore — dispatch is awaited and sequential).
+    import src.tool_implementations as _ti
+    saved_doc = _ti.get_active_document()
+    saved_model = _ti._active_model
+
+    token = _dispatch_depth.set(depth + 1)
+    try:
+        result = await asyncio.wait_for(
+            run_agent_text(
+                endpoint_url=endpoint_url,
+                model=model,
+                system_prompt=system_prompt,
+                user_message=task,
+                owner=owner,
+                session_id=None,
+                disabled_tools=disabled_tools,
+                relevant_tools=relevant_tools,
+                max_rounds=AGENT_DISPATCH_MAX_ROUNDS,
+            ),
+            timeout=AGENT_DISPATCH_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        result = f"(agent {name!r} timed out after {AGENT_DISPATCH_TIMEOUT_S}s)"
+    except Exception as e:
+        logger.warning(f"dispatch_agent {name!r} failed: {e}")
+        result = f"(agent {name!r} failed: {e})"
+    finally:
+        _dispatch_depth.reset(token)
+        _ti.set_active_document(saved_doc)
+        _ti.set_active_model(saved_model)
+
+    try:
+        from src.text_helpers import strip_think
+        result = strip_think(result or "", prose=True, prompt_echo=True).strip() or result
+    except Exception:
+        pass
+    if result and len(result) > DISPATCH_RESULT_MAX_CHARS:
+        result = result[:DISPATCH_RESULT_MAX_CHARS] + "\n... (truncated)"
+    return {"agent": name, "result": result}

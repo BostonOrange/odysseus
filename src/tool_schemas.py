@@ -24,6 +24,21 @@ FUNCTION_TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "dispatch_agent",
+            "description": "Delegate a self-contained task to a named specialist agent (e.g. 'code-reviewer', 'security-auditor') that runs in its OWN isolated context with its own restricted tool set, and return its result. Use when a task squarely fits one agent's expertise. The agent cannot see this conversation — put everything it needs into the task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "The agent's name, as listed in the agent library."},
+                    "task": {"type": "string", "description": "A complete, self-contained description of what the agent should do."},
+                },
+                "required": ["name", "task"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "bash",
             "description": "Run a shell command (full access)",
             "parameters": {
@@ -1282,6 +1297,8 @@ def function_call_to_tool_block(name: str, arguments: str) -> Optional[ToolBlock
         content = args.get("filter", "")
     elif tool_type == "send_to_session":
         content = args.get("session_id", "") + "\n" + args.get("message", "")
+    elif tool_type == "dispatch_agent":
+        content = args.get("name", "") + "\n" + args.get("task", "")
     elif tool_type == "pipeline":
         # Pass as JSON for the pipeline parser
         content = json.dumps({"steps": args.get("steps", [])})
