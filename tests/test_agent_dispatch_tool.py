@@ -45,7 +45,8 @@ def test_dispatch_runs_named_agent(seeded_db, monkeypatch):
     out = asyncio.run(ad.do_dispatch_agent("code-reviewer\nreview auth.py", owner="alice"))
 
     assert out == {"agent": "code-reviewer", "result": "review done"}
-    assert captured["system_prompt"] == "You are a reviewer."
+    assert captured["system_prompt"].startswith("You are a reviewer.")
+    assert "OUTPUT RULES" in captured["system_prompt"]  # dispatch output directive appended
     assert captured["user_message"] == "review auth.py"
     assert captured["endpoint_url"] == "http://x"
     assert captured["session_id"] is None  # isolated from the parent session

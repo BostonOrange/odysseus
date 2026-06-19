@@ -49,6 +49,15 @@ AGENT_DISPATCH_TIMEOUT_S = 240      # wall-clock cap per dispatch
 DISPATCH_RESULT_MAX_CHARS = 10_000  # truncate the returned string
 AGENT_DISPATCH_RAG_K = 8            # RAG-selected tool count for a dispatch
 GRACE_SUMMARY_TIMEOUT_S = 30        # final summarization call timeout
+
+# Appended to a dispatched agent's prompt. Small local models "think out loud"
+# in plain prose (no <think> tags, so strip_think can't catch it) and re-draft
+# their answer several times. This steers them to a single clean final answer.
+_DISPATCH_OUTPUT_DIRECTIVE = (
+    "\n\n---\nOUTPUT RULES (strict): When the task is done, reply with ONLY your "
+    "final answer. Do NOT restate the task, do NOT narrate your steps or "
+    "reasoning, and do NOT repeat yourself — give the answer exactly once, concisely."
+)
 _TOOL_SUMMARY_MAX_CHARS = 500       # per-tool-output snippet kept for grace summary
 _GRACE_TOOL_RESULTS_KEPT = 5        # how many recent tool snippets feed the grace summary
 
@@ -208,7 +217,7 @@ async def do_dispatch_agent(content: str, session_id: Optional[str] = None,
         )
         if crew is None:
             return {"error": f"dispatch_agent: no agent named {name!r} for this user"}
-        system_prompt = (crew.personality or "").strip() or f"You are {name}."
+        system_prompt = ((crew.personality or "").strip() or f"You are {name}.") + _DISPATCH_OUTPUT_DIRECTIVE
         # Resolve model/endpoint: crew override -> parent session -> (error).
         endpoint_url = crew.endpoint_url
         model = crew.model
