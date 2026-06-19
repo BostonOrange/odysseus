@@ -1371,6 +1371,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (target === 'skills') {
         import('./skills.js').then(m => { if (m.loadSkills) m.loadSkills(true); else if (m.default?.loadSkills) m.default.loadSkills(true); });
       }
+      if (target === 'agents') {
+        import('./agents.js').then(m => { if (m.loadAgents) m.loadAgents(); else if (m.default?.loadAgents) m.default.loadAgents(); });
+      }
     });
   });
 
