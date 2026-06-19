@@ -1,7 +1,16 @@
 import re
 from copy import deepcopy
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException, Request
+
+from core.middleware import require_admin
+
+
+def _reject_cross_site(request: Request):
+    """Reject browser cross-site navigations. hwfit probes hardware over SSH;
+    a cross-site GET would otherwise be a CSRF vector (mirrors shell_routes)."""
+    if request.headers.get("sec-fetch-site") == "cross-site":
+        raise HTTPException(403, "Cross-site request rejected")
 
 
 # Backends the manual hardware simulator accepts. Must stay a subset of what
@@ -98,7 +107,13 @@ def _apply_manual_hardware(system, manual_mode="", manual_gpu_count="", manual_v
 
 
 def setup_hwfit_routes():
-    router = APIRouter(prefix="/api/hwfit", tags=["hwfit"])
+    # hwfit drives model-serving (admin-only per THREAT_MODEL.md) and probes
+    # hardware over SSH, so gate the whole router: admin-only + no cross-site.
+    router = APIRouter(
+        prefix="/api/hwfit",
+        tags=["hwfit"],
+        dependencies=[Depends(require_admin), Depends(_reject_cross_site)],
+    )
 
     @router.get("/system")
     def get_system(host: str = "", ssh_port: str = "", platform: str = "", fresh: bool = False):
