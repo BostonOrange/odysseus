@@ -11,9 +11,29 @@ import asyncio
 import contextvars
 import json
 import logging
-from typing import Dict, Optional
+import re
+from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# `@agent-name <task>` at the very start of a chat message routes that turn to a
+# named agent. Names are slugs (letters/digits/_/-); the task is everything after.
+_MENTION_RE = re.compile(r"^\s*@([A-Za-z0-9][A-Za-z0-9_-]*)\s+(.+)$", re.DOTALL)
+
+
+def parse_agent_mention(text: str) -> Optional[Tuple[str, str]]:
+    """Return (agent_name, task) if `text` opens with `@name <task>`, else None.
+
+    Pure + side-effect-free so the chat route can cheaply check every message;
+    the route only treats it as a dispatch if the name resolves to a real agent.
+    """
+    m = _MENTION_RE.match(text or "")
+    if not m:
+        return None
+    task = m.group(2).strip()
+    if not task:  # "@name   " with only trailing whitespace is not a dispatch
+        return None
+    return m.group(1), task
 
 # Per-async-context nesting counter so a coordinator agent can sub-dispatch but
 # cannot runaway-spawn. It flows through the await chain (same task), so a
