@@ -804,6 +804,11 @@ async def _execute_tool_block_impl(
     elif tool == "manage_skills":
         desc = "manage_skills"
         result = await do_manage_skills(content, owner=owner)
+    elif tool == "dispatch_agent":
+        from src.agent_dispatch import do_dispatch_agent
+        agent_name = content.split("\n")[0].strip()
+        desc = f"dispatch_agent: {agent_name[:80]}"
+        result = await do_dispatch_agent(content, session_id=session_id, owner=owner)
     elif tool == "api_call":
         first_line = content.split("\n")[0].strip()[:60]
         desc = f"api_call: {first_line}"

@@ -72,6 +72,7 @@ BUILTIN_TOOL_DESCRIPTIONS: Dict[str, str] = {
     "web_search": "Quick single web lookup for a fact, current event, latest/current information, or doc mid-task. Use this instead of bash/curl/python/requests for web searches. NOT for 'research X' / 'do research on X' requests — those are deep-research jobs (use trigger_research). web_search = one query; trigger_research = a full researched report in the sidebar.",
     "web_fetch": "Fetch and read the text content of a specific URL/website the user names (e.g. 'check example.com', 'open this link'). Use when you have a concrete URL; for open-ended lookups use web_search instead.",
     "read_file": "Read a file from disk and return its contents. View source code, config files, logs. Supports an optional line range (offset/limit) for large files.",
+    "dispatch_agent": "Delegate a self-contained task to a named specialist agent (e.g. code-reviewer, security-auditor) that runs in its own isolated context with its own tool subset, and return its result. Use when a task squarely fits one agent's expertise.",
     "grep": "Search file CONTENTS for a regex across a directory tree (ripgrep-backed, honours .gitignore). Returns file:line:match. Use to find where code/symbols/strings live — prefer over bash grep.",
     "glob": "Find FILES by glob pattern (e.g. '**/*.py'), newest first. Use to locate files by name/extension — prefer over bash find/ls.",
     "ls": "List a directory's entries (folders then files with sizes). Use to see what's in a folder — prefer over bash ls.",

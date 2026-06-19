@@ -43,13 +43,28 @@ def test_background_session_sort_uses_owner_task_endpoint():
 def test_scheduler_fallbacks_and_research_headers_are_owner_scoped():
     src = _src("src/task_scheduler.py")
 
-    assert "resolve_utility_fallback_candidates(owner=task.owner or None)" in src
+    # The scheduled-task agent loop now delegates to the shared run_agent_text
+    # driver, threading the task owner through so the utility fallback chain and
+    # the endpoint header lookup stay owner-scoped (verified on the driver below).
+    assert "owner=task.owner," in src
     assert 'resolve_endpoint(\n                    "research",' in src
     assert "owner=task.owner or None" in src
     assert "headers_from_resolver = False" in src
     assert "headers_from_resolver = True" in src
     assert "from src.auth_helpers import owner_filter" in src
     assert "owner_filter(ep_q, ModelEndpoint, task.owner or None)" in src
+
+
+def test_shared_agent_driver_owner_scopes_fallbacks_and_headers():
+    # run_agent_text is the single capture-to-string path shared by the
+    # scheduler, dispatch_agent, and the @agent trigger. It must owner-scope both
+    # the utility fallback chain and the ModelEndpoint header lookup so a task or
+    # sub-agent never reads another user's endpoint key.
+    src = _src("src/agent_dispatch.py")
+
+    assert "_resolve_headers(endpoint_url, owner)" in src
+    assert "owner_filter(ep_q, ModelEndpoint, owner or None)" in src
+    assert "resolve_utility_fallback_candidates(owner=owner)" in src
 
 
 def test_research_routes_fallbacks_are_owner_scoped():

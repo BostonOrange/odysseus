@@ -1259,6 +1259,47 @@ def setup_chat_routes(
                         _max_rounds = _DEFAULT_ROUNDS
                     _max_rounds = max(1, min(_max_rounds, 200))
 
+                    # @agent-name dispatch: if the message opens with a mention
+                    # that resolves to one of this owner's agents, run THIS turn
+                    # as that agent — its persona becomes the system prompt and
+                    # its tool subset governs. Tightly gated: no mention, or an
+                    # unknown name, leaves normal chat completely unchanged.
+                    _agent_crew = None
+                    try:
+                        from src.agent_dispatch import parse_agent_mention
+                        _mention = parse_agent_mention(message or "")
+                        if _mention:
+                            from core.database import SessionLocal as _SL, CrewMember as _CM
+                            _adb = _SL()
+                            try:
+                                _agent_crew = (
+                                    _adb.query(_CM)
+                                    .filter(_CM.owner == _user,
+                                            _CM.name.ilike(_mention[0]),
+                                            _CM.is_default_assistant == False)  # noqa: E712
+                                    .first()
+                                )
+                                if _agent_crew:
+                                    _persona = (_agent_crew.personality or "").strip() or f"You are {_mention[0]}."
+                                    if messages and messages[0].get("role") == "system":
+                                        messages[0]["content"] = _persona
+                                    else:
+                                        messages.insert(0, {"role": "system", "content": _persona})
+                                    if messages and messages[-1].get("role") == "user":
+                                        messages[-1]["content"] = _mention[1]
+                                    try:
+                                        _enabled = json.loads(_agent_crew.enabled_tools or "[]")
+                                    except (TypeError, ValueError):
+                                        _enabled = []
+                                    if isinstance(_enabled, list) and _enabled:
+                                        from src.tool_index import BUILTIN_TOOL_DESCRIPTIONS as _BTD
+                                        disabled_tools = set(_BTD.keys()) - set(_enabled)
+                            finally:
+                                _adb.close()
+                    except Exception as _e:
+                        logger.warning(f"@agent dispatch override failed: {_e}")
+                        _agent_crew = None
+
                     async for chunk in stream_agent_loop(
                         sess.endpoint_url,
                         sess.model,
@@ -1266,7 +1307,7 @@ def setup_chat_routes(
                         headers=sess.headers,
                         temperature=ctx.preset.temperature,
                         max_tokens=ctx.preset.max_tokens,
-                        prompt_type=preset_id,
+                        prompt_type=None if _agent_crew else preset_id,
                         max_tool_calls=_tool_budget,
                         max_rounds=_max_rounds,
                         context_length=ctx.context_length,

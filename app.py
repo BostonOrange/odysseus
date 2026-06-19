@@ -693,6 +693,9 @@ app.include_router(setup_task_routes(task_scheduler))
 from routes.assistant_routes import setup_assistant_routes
 app.include_router(setup_assistant_routes(task_scheduler))
 
+from routes.agents_routes import setup_agents_routes
+app.include_router(setup_agents_routes())
+
 # Calendar (CalDAV)
 from routes.calendar_routes import setup_calendar_routes
 calendar_router = setup_calendar_routes()
