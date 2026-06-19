@@ -717,3 +717,13 @@ export function snapModalToZone(modal, zone) {
 }
 
 export {};
+
+// Test-only hooks (added on the upstream sync) so test_tile_manager_snap_zones_js.py
+// can exercise the private zone resolvers without a real DOM.
+export function _zoneForPointerForTests(x, y) {
+  return _zoneForPointer(x, y);
+}
+
+export function _zoneForContentForTests(content, x, y) {
+  return _zoneForContent(content, x, y);
+}

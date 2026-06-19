@@ -46,3 +46,8 @@ qrcode[pil]==8.2
 croniter==6.2.2
 pytest==9.0.3
 pytest-asyncio==1.4.0
+# starlette.testclient prefers httpx2 since Starlette 1.2.0 and warns on every
+# TestClient import when only classic httpx is present. Runtime code keeps
+# using `httpx` above; this is test-client only. (Unpinned — added on the
+# upstream sync; pin to a verified version on the next deliberate bump.)
+httpx2

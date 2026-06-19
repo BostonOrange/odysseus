@@ -6,6 +6,8 @@ type-guards). They are now canonical + re-export shim. Asserting the two import
 paths resolve to the SAME object makes future drift impossible by construction —
 replace a shim with a second copy and these tests fail.
 """
+import importlib
+
 import core.constants as core_constants
 import src.constants as src_constants
 import src.youtube_handler as src_yt
@@ -31,6 +33,13 @@ _YOUTUBE_PUBLIC = [
 
 
 def test_src_constants_is_a_shim_of_core():
+    # core.constants re-exports from src.constants (`from src.constants import *`).
+    # A prior test that reloads src.constants to probe env handling (e.g.
+    # test_fastembed_cache_path) mints fresh canonical objects, leaving core bound
+    # to stale ones. Re-run the shim's import against the CURRENT src.constants so
+    # this drift guard is order-independent — reloading only the shim, never
+    # src.constants itself, so no other test's references are invalidated.
+    importlib.reload(core_constants)
     for name in _CONSTANT_NAMES:
         assert hasattr(core_constants, name), f"core.constants missing {name}"
         assert hasattr(src_constants, name), f"src.constants missing {name}"

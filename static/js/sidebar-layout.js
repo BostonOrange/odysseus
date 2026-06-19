@@ -13,6 +13,24 @@ export function syncRailSide() {
 }
 
 /**
+ * Collapse the wide sidebar down to the icon rail, leaving a marker so app.js's
+ * paired window._restoreSidebarIfRouteCollapsed() re-expands it when the
+ * route/view that collapsed it closes. The /email and /notes route openers use
+ * the same marker — they can't both be active at once, so there's no conflict.
+ * (Formerly modalSnap.collapseSidebarToRail; modalSnap was removed when tiling
+ * replaced edge-docking, so this lives with syncRailSide, which it pairs with.)
+ */
+export function collapseSidebarToRail() {
+  const sidebar = document.getElementById('sidebar');
+  const rail = document.getElementById('icon-rail');
+  if (!sidebar || !rail || sidebar.classList.contains('hidden')) return;
+  document.body.dataset.routeCollapsedSidebar = '1';
+  sidebar.classList.add('hidden');
+  rail.classList.remove('rail-hidden');
+  try { syncRailSide(); } catch (_) {}
+}
+
+/**
  * Initialize sidebar layout: icon rail, hamburger cycling, mobile backdrop, swipe gestures.
  * @param {Object} Storage - Storage module
  * @param {Object} opts
